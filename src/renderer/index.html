@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:" />
+  <title>Oreum FPS Booster</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <aside class="side">
+    <div class="brand">
+      <div class="logo">O</div>
+      <div>
+        <div class="brand-name">Oreum FPS Booster</div>
+        <div class="brand-ver" id="ver">v2.0.0</div>
+      </div>
+    </div>
+    <nav id="nav">
+      <button data-page="dash" class="active"><span>🏠</span>대시보드</button>
+      <button data-page="optimize"><span>🚀</span>성능 최적화</button>
+      <button data-page="cleaner"><span>🧹</span>스마트 파일 청소</button>
+      <button data-page="check"><span>🩺</span>정밀 시스템 검사</button>
+      <button data-page="startup"><span>⏱</span>시작 프로그램</button>
+      <button data-page="bloat"><span>🗑</span>기본 앱 제거</button>
+      <button data-page="personal"><span>🎨</span>Windows 개인화</button>
+      <button data-page="backup"><span>🛟</span>백업·복원</button>
+      <button data-page="history"><span>📜</span>작업 기록</button>
+    </nav>
+    <div class="side-foot">
+      <div class="guard-pill" id="guardPill"><i></i><span>설정 유지 감시 켜짐</span></div>
+      모든 변경은 자동 백업되며<br />언제든 되돌릴 수 있습니다.
+    </div>
+  </aside>
+
+  <main>
+    <div id="adminBar" class="banner warn hidden">
+      <span>⚠ 관리자 권한이 아닙니다. 대부분의 최적화는 관리자 권한이 필요합니다.</span>
+      <button id="btnAdmin" class="btn small">관리자로 다시 실행</button>
+    </div>
+    <div id="rebootBar" class="banner info hidden">
+      <span>일부 설정은 재부팅(또는 로그아웃) 후 완전히 적용됩니다.</span>
+      <button id="btnReboot" class="btn small">지금 재부팅</button>
+    </div>
+    <div id="explorerBar" class="banner info hidden">
+      <span>탐색기·작업 표시줄 설정은 탐색기를 다시 시작하면 바로 반영됩니다.</span>
+      <button class="btn small" data-action="restartExplorer">탐색기 다시 시작</button>
+    </div>
+
+    <!-- 대시보드 -->
+    <section class="page" id="page-dash">
+      <h1>대시보드</h1>
+      <div class="monitor" id="monitor">
+        <div class="card tile" data-m="cpu"><div class="k">CPU</div><div class="v">-</div><canvas></canvas></div>
+        <div class="card tile" data-m="gpu"><div class="k">GPU (3D)</div><div class="v">-</div><canvas></canvas></div>
+        <div class="card tile" data-m="mem"><div class="k">메모리</div><div class="v">-</div><canvas></canvas></div>
+        <div class="card tile" data-m="disk"><div class="k">디스크 사용률</div><div class="v">-</div><canvas></canvas></div>
+        <div class="card tile" data-m="net"><div class="k">네트워크 (받기+보내기)</div><div class="v">-</div><canvas></canvas></div>
+      </div>
+
+      <div class="dash-grid">
+        <div class="card hero">
+          <div class="score">
+            <div class="ring" id="ring"><span id="scoreNum">0</span><small>%</small></div>
+            <div>
+              <div class="hero-title">최적화 적용률</div>
+              <div class="muted" id="scoreText">상태를 확인하는 중…</div>
+            </div>
+          </div>
+          <label class="chk"><input type="checkbox" id="chkRP" checked /> 적용 전 시스템 복원 지점 만들기</label>
+          <div class="row">
+            <button class="btn primary big" id="btnBoost">🚀 원클릭 성능 최적화</button>
+            <button class="btn ghost" id="btnRevertAll">↩ 모두 되돌리기</button>
+          </div>
+        </div>
+        <div class="card sysinfo">
+          <div class="card-title">시스템 정보</div>
+          <dl id="sysInfo">
+            <dt>CPU</dt><dd id="sCpu">-</dd>
+            <dt>GPU</dt><dd id="sGpu">-</dd>
+            <dt>메모리</dt><dd id="sRam">-</dd>
+            <dt>메인보드</dt><dd id="sBoard">-</dd>
+            <dt>운영체제</dt><dd id="sOs">-</dd>
+            <dt>가동 시간</dt><dd id="sUp">-</dd>
+          </dl>
+        </div>
+      </div>
+
+      <div class="grid4">
+        <button class="card quick" data-goto="cleaner"><div class="q-title">🧹 스마트 파일 청소</div><div class="muted">정크 파일 스캔·삭제</div></button>
+        <button class="card quick" data-goto="check"><div class="q-title">🩺 정밀 시스템 검사</div><div class="muted">문제점 찾고 해결</div></button>
+        <button class="card quick" data-action="trimMemory"><div class="q-title">🧠 메모리 정리</div><div class="muted">게임 실행 직전 추천</div></button>
+        <button class="card quick" data-action="flushDns"><div class="q-title">🌐 DNS 캐시 비우기</div><div class="muted">접속 지연·오류 해결</div></button>
+      </div>
+
+      <div class="card">
+        <div class="card-title">최근 작업</div>
+        <div id="recent" class="hist"></div>
+      </div>
+    </section>
+
+    <!-- 성능 최적화 -->
+    <section class="page hidden" id="page-optimize">
+      <div class="page-head">
+        <h1>성능 최적화</h1>
+        <div class="row">
+          <span class="legend"><i class="r low"></i>안전 <i class="r mid"></i>주의 <i class="r high"></i>위험</span>
+          <button class="btn primary" id="btnBoost2">권장 항목 모두 적용</button>
+        </div>
+      </div>
+      <div class="chips" id="catChips"></div>
+      <div class="actions" id="optActions"></div>
+      <div class="list" id="optList"></div>
+    </section>
+
+    <!-- 스마트 파일 청소 -->
+    <section class="page hidden" id="page-cleaner">
+      <div class="page-head">
+        <h1>스마트 파일 청소</h1>
+        <div class="row">
+          <button class="btn" id="btnScan">🔍 정크 파일 스캔</button>
+          <button class="btn primary" id="btnClean" disabled>선택 항목 정리</button>
+        </div>
+      </div>
+      <div class="drives" id="drives"></div>
+      <div class="card clean-sum" id="cleanSum">스캔을 눌러 정리할 수 있는 파일을 찾아보세요.</div>
+      <div id="cleanGroups"></div>
+    </section>
+
+    <!-- 정밀 시스템 검사 -->
+    <section class="page hidden" id="page-check">
+      <div class="page-head">
+        <h1>정밀 시스템 검사</h1>
+        <div class="row"><button class="btn primary" id="btnCheck">🩺 검사 시작</button></div>
+      </div>
+      <div class="grid3" id="checkSum">
+        <div class="card stat ok"><div class="k">정상</div><div class="v big" id="cOk">-</div></div>
+        <div class="card stat warn"><div class="k">주의</div><div class="v big" id="cWarn">-</div></div>
+        <div class="card stat bad"><div class="k">위험</div><div class="v big" id="cBad">-</div></div>
+      </div>
+      <div id="checkList"><div class="empty">검사 시작을 누르면 시스템·디스크·그래픽·보안·네트워크 상태를 점검합니다. (약 10~30초)</div></div>
+      <div class="card mt16">
+        <div class="card-title">심층 무결성 검사</div>
+        <div class="actions" id="checkActions"></div>
+      </div>
+    </section>
+
+    <!-- 시작 프로그램 -->
+    <section class="page hidden" id="page-startup">
+      <div class="page-head">
+        <h1>시작 프로그램</h1>
+        <div class="row"><button class="btn" id="btnStartupRefresh">새로고침</button></div>
+      </div>
+      <p class="muted">부팅 시 자동 실행되는 프로그램입니다. 끄면 작업 관리자 &gt; 시작 프로그램의 "사용 안 함"과 같습니다. (삭제하지 않음)</p>
+      <div class="list" id="startupList"></div>
+    </section>
+
+    <!-- 기본 앱 제거 -->
+    <section class="page hidden" id="page-bloat">
+      <div class="page-head">
+        <h1>기본 앱 제거</h1>
+        <div class="row">
+          <button class="btn" id="btnBloatRefresh">새로고침</button>
+          <button class="btn danger" id="btnBloatRemove" disabled>선택한 앱 제거</button>
+        </div>
+      </div>
+      <p class="muted">Windows에 기본으로 깔려 있지만 대부분 쓰지 않는 앱입니다. 제거한 앱은 Microsoft Store에서 다시 설치할 수 있습니다. Store·사진·계산기·Xbox 게임 실행 구성 요소 등 필수 앱은 목록에 나오지 않습니다.</p>
+      <div class="list" id="bloatList"></div>
+    </section>
+
+    <!-- Windows 개인화 -->
+    <section class="page hidden" id="page-personal">
+      <h1>Windows 개인화</h1>
+      <p class="muted">탐색기·작업 표시줄·테마 설정입니다. 켜고 끌 때마다 원래 값이 백업됩니다.</p>
+      <div class="actions" id="personalActions"></div>
+      <div class="list" id="personalList"></div>
+    </section>
+
+    <!-- 백업·복원 -->
+    <section class="page hidden" id="page-backup">
+      <h1>백업·복원</h1>
+      <div class="card item">
+        <div class="body">
+          <div class="title">설정 유지 감시</div>
+          <div class="desc">Windows 업데이트 등으로 적용한 최적화가 원래대로 돌아가면, 프로그램이 켜져 있는 동안 10분마다 확인해 자동으로 다시 적용합니다.</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="chkGuard" /><span class="slider"></span></label>
+      </div>
+      <p class="muted">최적화를 적용할 때마다 변경 전 값이 자동 저장됩니다. 항목별 또는 전체를 Windows 원래 값으로 되돌릴 수 있습니다.</p>
+      <div class="row">
+        <button class="btn" data-action="restorePoint">시스템 복원 지점 만들기</button>
+        <button class="btn ghost" id="btnOpenBackup">백업 폴더 열기</button>
+        <button class="btn danger" id="btnRevertAll2">전체 기본값 복원</button>
+      </div>
+      <div class="list" id="backupList"></div>
+    </section>
+
+    <!-- 작업 기록 -->
+    <section class="page hidden" id="page-history">
+      <h1>작업 기록</h1>
+      <div class="card"><div id="histAll" class="hist"></div></div>
+      <h2>이번 실행 로그</h2>
+      <pre id="log"></pre>
+    </section>
+  </main>
+
+  <div id="busy" class="busy hidden"><div class="spinner"></div><div id="busyText">처리 중…</div></div>
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="app.js"></script>
+</body>
+</html>

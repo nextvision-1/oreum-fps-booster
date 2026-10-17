@@ -1,0 +1,296 @@
+// 최적화 항목 정의
+// 연산 타입
+//   reg   : 레지스트리 값            { path, name, kind, value }
+//   svc   : 서비스 시작 유형          { name, start }  (2 자동, 3 수동, 4 사용 안 함)
+//   power : 최고 성능 전원 계획 활성화
+//   pcfg  : 현재 전원 계획의 세부 값   { sub, set, value }
+//   key   : 기본값만 가진 키 생성      { path, root, value }
+const HKLM = 'Registry::HKEY_LOCAL_MACHINE';
+const HKCU = 'Registry::HKEY_CURRENT_USER';
+const MM = HKLM + '\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Multimedia\\SystemProfile';
+const GAMES = MM + '\\Tasks\\Games';
+const ADV = HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced';
+const CDM = HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\ContentDeliveryManager';
+const FS = HKLM + '\\SYSTEM\\CurrentControlSet\\Control\\FileSystem';
+
+const reg = (path, name, kind, value) => ({ t: 'reg', path, name, kind, value });
+const dw = (path, name, value) => reg(path, name, 'DWord', value);
+const sz = (path, name, value) => reg(path, name, 'String', value);
+const svc = (name, start) => ({ t: 'svc', name, start });
+const pcfg = (sub, set, value) => ({ t: 'pcfg', sub, set, value });
+
+// 전원 설정 GUID
+const SUB_PROC = '54533251-82be-4824-96c1-47b60b740d00';
+const SUB_USB = '2a737441-1930-4402-8d77-b2bebba308a3';
+const SUB_PCIE = '501a4d13-42af-4429-9fd1-a8218c268e20';
+const SUB_DISK = '0012ee47-9041-4b5d-9b77-535fba8b1442';
+const SUB_SLEEP = '238c9fa8-0aad-41ed-83f4-97be242c8f20';
+
+// 시각 효과 "최적 성능" 마스크 (90 12 03 80 10 00 00 00)
+const PERF_MASK = Buffer.from([0x90, 0x12, 0x03, 0x80, 0x10, 0x00, 0x00, 0x00]).toString('base64');
+
+const CATEGORIES = [
+  { id: 'power', name: '전원·CPU', icon: '⚡' },
+  { id: 'gpu', name: '게임·그래픽', icon: '🎮' },
+  { id: 'net', name: '네트워크·입력', icon: '🎯' },
+  { id: 'system', name: '시스템·백그라운드', icon: '🧩' },
+  { id: 'personal', name: 'Windows 개인화', icon: '🎨' },
+];
+
+// risk: low(안전) | mid(주의) | high(위험)
+const TWEAKS = [
+  // ───────── 전원·CPU ─────────
+  { id: 'powerplan', cat: 'power', recommended: true, risk: 'low',
+    name: '최고 성능 전원 관리 옵션',
+    desc: '숨겨진 "최고의 성능" 전원 계획을 만들고 활성화합니다. 아래 전원 세부 설정보다 먼저 적용됩니다. (노트북은 배터리 소모 증가)',
+    ops: [{ t: 'power' }] },
+  { id: 'coreparking', cat: 'power', recommended: true, risk: 'low',
+    name: 'CPU 코어 파킹 끄기',
+    desc: '유휴 코어를 잠재우는 코어 파킹을 꺼서, 게임 부하가 튈 때 코어가 깨어나는 지연을 없앱니다.',
+    ops: [pcfg(SUB_PROC, '0cc5b647-c1df-4637-891a-dec35c318583', 100)] },
+  { id: 'procmin', cat: 'power', recommended: true, risk: 'low',
+    name: '최소 프로세서 상태 100%',
+    desc: 'CPU 클럭이 절전 상태로 내려가지 않도록 최소 프로세서 상태를 100%로 고정합니다. (온도·전력 약간 증가)',
+    ops: [pcfg(SUB_PROC, '893dee8e-2bef-41e0-89c6-b55d0929964c', 100)] },
+  { id: 'usbsuspend', cat: 'power', recommended: true, risk: 'low',
+    name: 'USB 선택적 절전 해제',
+    desc: '마우스·키보드·헤드셋 USB 포트가 절전으로 끊기거나 반응이 늦어지는 현상을 막습니다.',
+    ops: [pcfg(SUB_USB, '48e6b7a6-50f5-4782-a5d4-53bb8f07e226', 0)] },
+  { id: 'pcielink', cat: 'power', recommended: true, risk: 'low',
+    name: 'PCIe 링크 상태 절전 끄기',
+    desc: '그래픽카드·NVMe SSD 연결(PCIe)의 절전 전환을 꺼서 순간 지연과 프레임 드랍을 줄입니다.',
+    ops: [pcfg(SUB_PCIE, 'ee12f906-d277-404b-b6da-e5fa1a576df5', 0)] },
+  { id: 'diskidle', cat: 'power', recommended: true, risk: 'low',
+    name: '하드 디스크 끄기 사용 안 함',
+    desc: '일정 시간 후 디스크 전원을 끄지 않도록 해, 게임 로딩 중 디스크가 다시 도는 지연을 없앱니다.',
+    ops: [pcfg(SUB_DISK, '6738e2c4-e8a5-4a42-b16a-e040e769756e', 0)] },
+  { id: 'hybridsleep', cat: 'power', recommended: false, risk: 'low',
+    name: '절전 모드 진입 끄기',
+    desc: '일정 시간 입력이 없으면 PC가 절전 모드로 들어가는 기능을 끕니다. (다운로드·패치 대기 중 유용)',
+    ops: [pcfg(SUB_SLEEP, '29f6c1db-86da-48c5-9fdb-f2b67b1f44da', 0)] },
+  { id: 'powerthrottle', cat: 'power', recommended: true, risk: 'low',
+    name: '전원 스로틀링 끄기',
+    desc: '백그라운드로 판단된 프로세스의 CPU 효율 모드를 해제합니다. 방송·디스코드 병행 시 끊김 감소.',
+    ops: [dw(HKLM + '\\SYSTEM\\CurrentControlSet\\Control\\Power\\PowerThrottling', 'PowerThrottlingOff', 1)] },
+  { id: 'prio', cat: 'power', recommended: true, risk: 'low',
+    name: '전경 프로그램 CPU 우선 배분',
+    desc: 'Win32PrioritySeparation=0x26 — 활성 창(게임)에 짧고 가변적인 CPU 시간 단위를 줘 입력 반응성을 높입니다.',
+    ops: [dw(HKLM + '\\SYSTEM\\CurrentControlSet\\Control\\PriorityControl', 'Win32PrioritySeparation', 38)] },
+  { id: 'timer', cat: 'power', recommended: false, risk: 'mid', reboot: true,
+    name: '전역 타이머 해상도 요청 허용 (Win11)',
+    desc: 'Windows 11에서 게임이 요청한 고해상도 타이머(1ms 이하)가 최소화된 창에서도 유지되도록 합니다. 프레임 타이밍이 안정되지만 전력 사용이 늘 수 있습니다.',
+    ops: [dw(HKLM + '\\SYSTEM\\CurrentControlSet\\Control\\Session Manager\\kernel', 'GlobalTimerResolutionRequests', 1)] },
+
+  // ───────── 게임·그래픽 ─────────
+  { id: 'gamemode', cat: 'gpu', recommended: true, risk: 'low',
+    name: 'Windows 게임 모드 켜기',
+    desc: '게임 실행 중 백그라운드 작업과 업데이트 설치를 억제하고 게임에 자원을 먼저 배정합니다.',
+    ops: [dw(HKCU + '\\Software\\Microsoft\\GameBar', 'AutoGameModeEnabled', 1), dw(HKCU + '\\Software\\Microsoft\\GameBar', 'AllowAutoGameMode', 1)] },
+  { id: 'gamedvr', cat: 'gpu', recommended: true, risk: 'low',
+    name: '백그라운드 녹화(Game DVR) 끄기',
+    desc: '게임 바의 백그라운드 녹화·캡처를 꺼서 GPU 인코더와 디스크 부하를 없앱니다.',
+    ops: [
+      dw(HKCU + '\\System\\GameConfigStore', 'GameDVR_Enabled', 0),
+      dw(HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\GameDVR', 'AppCaptureEnabled', 0),
+      dw(HKLM + '\\SOFTWARE\\Policies\\Microsoft\\Windows\\GameDVR', 'AllowGameDVR', 0),
+    ] },
+  { id: 'gamebar', cat: 'gpu', recommended: false, risk: 'low',
+    name: 'Xbox Game Bar 단축키·팝업 끄기',
+    desc: 'Win+G 게임 바 호출과 게임 시작 시 뜨는 팁 팝업을 끕니다. (Xbox 앱 기능은 유지)',
+    ops: [dw(HKCU + '\\Software\\Microsoft\\GameBar', 'UseNexusForGameBarEnabled', 0), dw(HKCU + '\\Software\\Microsoft\\GameBar', 'ShowStartupPanel', 0)] },
+  { id: 'gamesched', cat: 'gpu', recommended: true, risk: 'low',
+    name: '게임 작업 우선순위 (MMCSS)',
+    desc: '멀티미디어 스케줄러에서 게임 작업의 CPU/GPU 우선순위를 높이고 백그라운드 예약 비율을 줄입니다.',
+    ops: [
+      dw(MM, 'SystemResponsiveness', 10),
+      dw(GAMES, 'GPU Priority', 8),
+      dw(GAMES, 'Priority', 6),
+      sz(GAMES, 'Scheduling Category', 'High'),
+      sz(GAMES, 'SFIO Priority', 'High'),
+    ] },
+  { id: 'hags', cat: 'gpu', recommended: false, risk: 'mid', reboot: true,
+    name: '하드웨어 가속 GPU 스케줄링 (HAGS)',
+    desc: 'GPU가 자체 메모리 스케줄링을 맡아 CPU 부담과 지연을 줄입니다. GTX 10 / RX 5000 이상 + 최신 드라이버 필요. 일부 게임은 불안정해질 수 있습니다.',
+    ops: [dw(HKLM + '\\SYSTEM\\CurrentControlSet\\Control\\GraphicsDrivers', 'HwSchMode', 2)] },
+  { id: 'fso', cat: 'gpu', recommended: false, risk: 'mid',
+    name: '전체 화면 최적화(FSO) 끄기',
+    desc: '전역적으로 전체 화면 최적화를 꺼서 독점 전체화면을 강제합니다. 입력 지연이 줄 수 있지만 Alt+Tab 이 느려지거나 HDR·오버레이가 안 될 수 있습니다.',
+    ops: [
+      dw(HKCU + '\\System\\GameConfigStore', 'GameDVR_FSEBehaviorMode', 2),
+      dw(HKCU + '\\System\\GameConfigStore', 'GameDVR_FSEBehavior', 2),
+      dw(HKCU + '\\System\\GameConfigStore', 'GameDVR_HonorUserFSEBehaviorMode', 1),
+      dw(HKCU + '\\System\\GameConfigStore', 'GameDVR_DXGIHonorFSEWindowsCompatible', 1),
+    ] },
+  { id: 'vbs', cat: 'gpu', recommended: false, risk: 'high', reboot: true,
+    name: '메모리 무결성(HVCI) 끄기',
+    desc: '가상화 기반 보안의 메모리 무결성을 끕니다. CPU에 따라 FPS가 5~15% 오를 수 있지만 커널 악성코드 방어가 약해집니다. 일부 안티치트(FACEIT 등)는 켜져 있어야 할 수 있습니다.',
+    ops: [dw(HKLM + '\\SYSTEM\\CurrentControlSet\\Control\\DeviceGuard\\Scenarios\\HypervisorEnforcedCodeIntegrity', 'Enabled', 0)] },
+  { id: 'visualfx', cat: 'gpu', recommended: true, risk: 'low', relogin: true,
+    name: '시각 효과 최소화',
+    desc: '창 애니메이션·그림자·메뉴 지연을 끄고 "최적 성능" 시각 효과로 바꿉니다. 저사양 PC에서 체감이 큽니다.',
+    ops: [
+      dw(HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\VisualEffects', 'VisualFXSetting', 2),
+      reg(HKCU + '\\Control Panel\\Desktop', 'UserPreferencesMask', 'Binary', PERF_MASK),
+      sz(HKCU + '\\Control Panel\\Desktop', 'MenuShowDelay', '0'),
+      sz(HKCU + '\\Control Panel\\Desktop\\WindowMetrics', 'MinAnimate', '0'),
+      dw(ADV, 'TaskbarAnimations', 0),
+    ] },
+  { id: 'transparency', cat: 'gpu', recommended: true, risk: 'low',
+    name: '투명 효과 끄기',
+    desc: '작업 표시줄·시작 메뉴의 반투명(아크릴) 효과를 꺼서 데스크톱 창 관리자(DWM)의 GPU 사용을 줄입니다.',
+    ops: [dw(HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize', 'EnableTransparency', 0)] },
+
+  // ───────── 네트워크·입력 ─────────
+  { id: 'netthrottle', cat: 'net', recommended: true, risk: 'low',
+    name: '네트워크 스로틀링 해제',
+    desc: 'NetworkThrottlingIndex=0xFFFFFFFF — 멀티미디어 재생 중 일반 패킷 처리량을 제한하는 기능을 없앱니다.',
+    ops: [dw(MM, 'NetworkThrottlingIndex', 0xffffffff)] },
+  { id: 'nagle', cat: 'net', recommended: true, risk: 'low', dynamic: 'nagle',
+    name: 'Nagle 알고리즘 끄기',
+    desc: '사용 중인 모든 네트워크 어댑터에 TcpAckFrequency=1, TCPNoDelay=1 을 적용해 작은 패킷을 즉시 보냅니다. TCP 기반 게임(롤, 메이플 등)에서 효과.',
+    ops: [] },
+  { id: 'qos', cat: 'net', recommended: true, risk: 'low',
+    name: 'QoS 예약 대역폭 0%',
+    desc: '시스템이 QoS용으로 예약해 두는 대역폭 제한을 0%로 설정합니다.',
+    ops: [dw(HKLM + '\\SOFTWARE\\Policies\\Microsoft\\Windows\\Psched', 'NonBestEffortLimit', 0)] },
+  { id: 'deliveryopt', cat: 'net', recommended: true, risk: 'low',
+    name: '업데이트 P2P 공유(배달 최적화) 끄기',
+    desc: '다른 PC와 Windows 업데이트 조각을 주고받는 기능을 꺼서 게임 중 업로드 대역폭 낭비를 막습니다.',
+    ops: [dw(HKLM + '\\SOFTWARE\\Policies\\Microsoft\\Windows\\DeliveryOptimization', 'DODownloadMode', 0)] },
+  { id: 'mouse', cat: 'net', recommended: true, risk: 'low',
+    name: '마우스 가속(포인터 정확도 향상) 끄기',
+    desc: '마우스 이동 속도에 따른 가속을 꺼서 1:1 에임 입력을 만듭니다. FPS 게임 필수 설정.',
+    ops: [sz(HKCU + '\\Control Panel\\Mouse', 'MouseSpeed', '0'), sz(HKCU + '\\Control Panel\\Mouse', 'MouseThreshold1', '0'), sz(HKCU + '\\Control Panel\\Mouse', 'MouseThreshold2', '0')] },
+  { id: 'keyboard', cat: 'net', recommended: false, risk: 'low', relogin: true,
+    name: '키보드 반복 지연 최소화',
+    desc: '키 반복 시작 지연을 최소, 반복 속도를 최대로 설정합니다.',
+    ops: [sz(HKCU + '\\Control Panel\\Keyboard', 'KeyboardDelay', '0'), sz(HKCU + '\\Control Panel\\Keyboard', 'KeyboardSpeed', '31')] },
+  { id: 'stickykeys', cat: 'net', recommended: true, risk: 'low',
+    name: '고정 키·필터 키 단축키 끄기',
+    desc: 'Shift 5번 / 오른쪽 Shift 길게 누를 때 게임 화면을 가로채는 접근성 팝업을 끕니다.',
+    ops: [
+      sz(HKCU + '\\Control Panel\\Accessibility\\StickyKeys', 'Flags', '506'),
+      sz(HKCU + '\\Control Panel\\Accessibility\\Keyboard Response', 'Flags', '122'),
+      sz(HKCU + '\\Control Panel\\Accessibility\\ToggleKeys', 'Flags', '58'),
+    ] },
+
+  // ───────── 시스템·백그라운드 ─────────
+  { id: 'bgapps', cat: 'system', recommended: true, risk: 'low',
+    name: '백그라운드 앱 실행 차단',
+    desc: '스토어 앱이 백그라운드에서 실행되지 않도록 합니다. 일부 앱 알림이 늦게 올 수 있습니다.',
+    ops: [dw(HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\BackgroundAccessApplications', 'GlobalUserDisabled', 1), dw(HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\Search', 'BackgroundAppGlobalToggle', 0)] },
+  { id: 'startupdelay', cat: 'system', recommended: true, risk: 'low',
+    name: '시작 프로그램 지연 제거',
+    desc: '부팅 후 시작 프로그램을 일부러 늦게 실행하는 대기 시간을 없애 바탕화면이 빨리 준비됩니다.',
+    ops: [dw(HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Serialize', 'StartupDelayInMSec', 0)] },
+  { id: 'suggest', cat: 'system', recommended: true, risk: 'low',
+    name: '추천 앱·팁·광고 자동 설치 끄기',
+    desc: '시작 메뉴 추천, 팁 알림, 앱 자동 설치를 끕니다.',
+    ops: [
+      dw(CDM, 'SilentInstalledAppsEnabled', 0), dw(CDM, 'SystemPaneSuggestionsEnabled', 0),
+      dw(CDM, 'SubscribedContent-338389Enabled', 0), dw(CDM, 'SubscribedContent-338388Enabled', 0),
+      dw(CDM, 'SubscribedContent-310093Enabled', 0), dw(CDM, 'SoftLandingEnabled', 0),
+    ] },
+  { id: 'adid', cat: 'system', recommended: true, risk: 'low',
+    name: '광고 ID·활동 기록 끄기',
+    desc: '맞춤 광고 ID와 타임라인 활동 기록 수집을 끕니다.',
+    ops: [
+      dw(HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\AdvertisingInfo', 'Enabled', 0),
+      dw(HKLM + '\\SOFTWARE\\Policies\\Microsoft\\Windows\\System', 'EnableActivityFeed', 0),
+      dw(HKLM + '\\SOFTWARE\\Policies\\Microsoft\\Windows\\System', 'PublishUserActivities', 0),
+    ] },
+  { id: 'telemetry', cat: 'system', recommended: true, risk: 'low',
+    name: '원격 분석(DiagTrack) 끄기',
+    desc: '진단 데이터 수집 서비스를 중지하고 수집 수준을 최소로 낮춰 백그라운드 디스크·네트워크 사용을 줄입니다.',
+    ops: [dw(HKLM + '\\SOFTWARE\\Policies\\Microsoft\\Windows\\DataCollection', 'AllowTelemetry', 0), svc('DiagTrack', 4), svc('dmwappushservice', 4)] },
+  { id: 'wer', cat: 'system', recommended: true, risk: 'low',
+    name: '오류 보고 끄기',
+    desc: '프로그램이 멈출 때 오류 보고서를 만들고 전송하는 작업을 끕니다.',
+    ops: [dw(HKLM + '\\SOFTWARE\\Microsoft\\Windows\\Windows Error Reporting', 'Disabled', 1), svc('WerSvc', 3)] },
+  { id: 'bingsearch', cat: 'system', recommended: true, risk: 'low',
+    name: '시작 메뉴 웹(Bing) 검색 끄기',
+    desc: '시작 메뉴에서 검색할 때 인터넷 결과를 가져오지 않게 해 검색이 빨라지고 네트워크를 덜 씁니다.',
+    ops: [dw(HKCU + '\\Software\\Policies\\Microsoft\\Windows\\Explorer', 'DisableSearchBoxSuggestions', 1), dw(HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\Search', 'BingSearchEnabled', 0)] },
+  { id: 'widgets', cat: 'system', recommended: true, risk: 'low',
+    name: '위젯·뉴스 피드 끄기',
+    desc: '작업 표시줄 위젯(뉴스·날씨)이 백그라운드에서 계속 콘텐츠를 불러오는 것을 막습니다.',
+    ops: [dw(HKLM + '\\SOFTWARE\\Policies\\Microsoft\\Dsh', 'AllowNewsAndInterests', 0), dw(HKLM + '\\SOFTWARE\\Policies\\Microsoft\\Windows\\Windows Feeds', 'EnableFeeds', 0)] },
+  { id: 'copilot', cat: 'system', recommended: false, risk: 'low',
+    name: 'Windows Copilot 끄기',
+    desc: '작업 표시줄의 Copilot 기능을 비활성화합니다.',
+    ops: [dw(HKCU + '\\Software\\Policies\\Microsoft\\Windows\\WindowsCopilot', 'TurnOffWindowsCopilot', 1)] },
+  { id: 'noautoreboot', cat: 'system', recommended: true, risk: 'low',
+    name: '업데이트 후 자동 재시작 막기',
+    desc: '로그인 중일 때 Windows 업데이트가 PC를 멋대로 재시작하지 않게 합니다. (게임 중 재부팅 방지)',
+    ops: [dw(HKLM + '\\SOFTWARE\\Policies\\Microsoft\\Windows\\WindowsUpdate\\AU', 'NoAutoRebootWithLoggedOnUsers', 1)] },
+  { id: 'maintenance', cat: 'system', recommended: false, risk: 'mid',
+    name: '자동 유지 관리 끄기',
+    desc: '유휴 시간에 실행되는 조각 모음·검사 등 자동 유지 관리를 끕니다. 게임 중 갑작스런 디스크 사용을 막지만, 수동으로 가끔 최적화해 주어야 합니다.',
+    ops: [dw(HKLM + '\\SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Schedule\\Maintenance', 'MaintenanceDisabled', 1)] },
+  { id: 'ntfs', cat: 'system', recommended: true, risk: 'low',
+    name: 'NTFS 마지막 접근 시간·8.3 이름 기록 끄기',
+    desc: '파일을 읽을 때마다 접근 시간을 기록하는 작업과 옛날식 짧은 파일명 생성을 꺼서 디스크 쓰기를 줄입니다.',
+    ops: [dw(FS, 'NtfsDisableLastAccessUpdate', 0x80000001), dw(FS, 'NtfsDisable8dot3NameCreation', 1)] },
+  { id: 'services', cat: 'system', recommended: true, risk: 'low',
+    name: '불필요한 서비스 정리',
+    desc: '대부분 사용자에게 필요 없는 서비스(지도 다운로드, 팩스, 매장 데모, 원격 레지스트리, 자녀 보호 모니터 등)를 끄거나 수동으로 바꿉니다.',
+    ops: [svc('MapsBroker', 3), svc('Fax', 4), svc('RetailDemo', 4), svc('RemoteRegistry', 4), svc('WpcMonSvc', 3), svc('diagnosticshub.standardcollector.service', 3), svc('lfsvc', 3)] },
+  { id: 'sysmain', cat: 'system', recommended: false, risk: 'mid',
+    name: 'SysMain(Superfetch) 끄기',
+    desc: '앱 미리 읽기 서비스를 끕니다. 게임 중 디스크·메모리 사용 급증이 줄 수 있지만, HDD 사용자는 프로그램 실행이 느려질 수 있습니다.',
+    ops: [svc('SysMain', 4)] },
+  { id: 'wsearch', cat: 'system', recommended: false, risk: 'mid',
+    name: 'Windows 검색 색인 수동 전환',
+    desc: '파일 색인 서비스를 "수동"으로 바꿔 백그라운드 디스크 사용을 줄입니다. 시작 메뉴 파일 검색이 느려집니다.',
+    ops: [svc('WSearch', 3)] },
+
+  // ───────── Windows 개인화 ─────────
+  { id: 'fileext', cat: 'personal', recommended: false, risk: 'low', explorer: true,
+    name: '파일 확장명 표시',
+    desc: '탐색기에서 .exe .zip 같은 확장명을 항상 보여 줍니다. (가짜 확장명 악성파일 구분에 도움)',
+    ops: [dw(ADV, 'HideFileExt', 0)] },
+  { id: 'hidden', cat: 'personal', recommended: false, risk: 'low', explorer: true,
+    name: '숨김 파일 표시',
+    desc: '탐색기에서 숨김 파일과 폴더를 보여 줍니다.',
+    ops: [dw(ADV, 'Hidden', 1)] },
+  { id: 'gallery', cat: 'personal', recommended: false, risk: 'low', explorer: true,
+    name: '탐색기 "갤러리" 숨기기 (Win11)',
+    desc: '탐색기 왼쪽 탐색 창의 갤러리 항목을 숨깁니다.',
+    ops: [dw(HKCU + '\\Software\\Classes\\CLSID\\{e88865ea-0e1c-4e20-9aa6-edcd0212c87c}', 'System.IsPinnedToNameSpaceTree', 0)] },
+  { id: 'thispc', cat: 'personal', recommended: false, risk: 'low', explorer: true,
+    name: '탐색기를 "내 PC"로 열기',
+    desc: '탐색기를 열 때 홈(최근 파일) 대신 내 PC가 열리도록 합니다.',
+    ops: [dw(ADV, 'LaunchTo', 1)] },
+  { id: 'classicmenu', cat: 'personal', recommended: false, risk: 'low', explorer: true,
+    name: '클래식 우클릭 메뉴 (Win11)',
+    desc: 'Windows 11의 간소화된 우클릭 메뉴 대신 "더 많은 옵션 표시" 없이 바로 전체 메뉴가 나옵니다.',
+    ops: [{ t: 'key', path: HKCU + '\\Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}\\InprocServer32', root: HKCU + '\\Software\\Classes\\CLSID\\{86ca1aa0-34aa-4e8b-a509-50c905bae2a2}', value: '' }] },
+  { id: 'taskleft', cat: 'personal', recommended: false, risk: 'low', explorer: true,
+    name: '작업 표시줄 왼쪽 정렬 (Win11)',
+    desc: '작업 표시줄 아이콘을 Windows 10처럼 왼쪽으로 정렬합니다.',
+    ops: [dw(ADV, 'TaskbarAl', 0)] },
+  { id: 'taskview', cat: 'personal', recommended: false, risk: 'low', explorer: true,
+    name: '작업 표시줄 작업 보기 버튼 숨기기',
+    desc: '작업 표시줄에서 작업 보기(가상 데스크톱) 버튼을 숨깁니다.',
+    ops: [dw(ADV, 'ShowTaskViewButton', 0)] },
+  { id: 'searchicon', cat: 'personal', recommended: false, risk: 'low', explorer: true,
+    name: '작업 표시줄 검색창을 아이콘으로',
+    desc: '작업 표시줄의 긴 검색 상자를 돋보기 아이콘으로 줄입니다.',
+    ops: [dw(HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\Search', 'SearchboxTaskbarMode', 1)] },
+  { id: 'darkmode', cat: 'personal', recommended: false, risk: 'low',
+    name: '다크 모드',
+    desc: 'Windows와 앱을 어두운 테마로 바꿉니다.',
+    ops: [dw(HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize', 'AppsUseLightTheme', 0), dw(HKCU + '\\Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize', 'SystemUsesLightTheme', 0)] },
+];
+
+const ACTIONS = [
+  { id: 'trimMemory', cat: 'system', name: '메모리 정리', desc: '실행 중인 프로세스의 작업 메모리를 비워 사용 가능한 RAM을 확보합니다. 게임 실행 직전에 사용하세요.' },
+  { id: 'flushDns', cat: 'net', name: 'DNS 캐시 비우기', desc: '오래된 DNS 캐시를 지워 접속 문제를 해결합니다.' },
+  { id: 'resetNet', cat: 'net', name: '네트워크 초기화 (Winsock)', desc: 'Winsock·TCP/IP 스택을 초기화합니다. 인터넷이 이상할 때 사용하고, 실행 후 재부팅하세요.' },
+  { id: 'restartExplorer', cat: 'personal', name: '탐색기 다시 시작', desc: '개인화 설정을 바로 반영하려면 탐색기를 다시 시작하세요.' },
+  { id: 'restorePoint', cat: 'backup', name: '시스템 복원 지점 만들기', desc: 'Windows 시스템 복원 지점을 생성합니다. (시스템 보호가 켜져 있어야 함)' },
+  { id: 'sfc', cat: 'check', name: '시스템 파일 검사 (SFC)', desc: '손상된 Windows 시스템 파일을 찾아 복구합니다. 5~15분 걸립니다.' },
+  { id: 'dism', cat: 'check', name: 'Windows 이미지 복구 (DISM)', desc: 'Windows 구성 요소 저장소를 검사·복구합니다. 인터넷 연결 필요, 10~30분 걸립니다.' },
+];
+
+module.exports = { CATEGORIES, TWEAKS, ACTIONS, reg };
