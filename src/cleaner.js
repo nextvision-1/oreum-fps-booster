@@ -93,15 +93,18 @@ foreach ($c in @($A.items)) {
   } else {
     foreach ($p in @($c.paths)) {
       foreach ($it in (ExpandP $p)) {
+        # 파일을 지우면 폴더 수정 시각이 바뀌므로, 지우기 전에 하위 폴더 목록과 시각을 기록해 둔다
+        $dirs = @()
+        if ($it.PSIsContainer) { $dirs = @($it) + @(Get-ChildItem -LiteralPath $it.FullName -Recurse -Force -Directory -ErrorAction SilentlyContinue) }
         foreach ($f in (FilesOf $it $c.olderH)) {
           $len = [int64]$f.Length
           try { Remove-Item -LiteralPath $f.FullName -Force -ErrorAction Stop; $freed += $len; $count++ } catch { $skip++ }
         }
-        # 비어 있는 하위 폴더 정리 (상위 폴더 자체는 유지)
-        if ($it.PSIsContainer -and -not $c.olderH) {
-          Get-ChildItem -LiteralPath $it.FullName -Recurse -Force -Directory -ErrorAction SilentlyContinue | Sort-Object { $_.FullName.Length } -Descending | ForEach-Object {
-            if (-not (Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
-          }
+        # 비어 있는 폴더 정리 (와일드카드 앞의 대상 폴더 자체는 유지). 시간 조건이 있으면 그보다 오래된 폴더만
+        $lim = $null
+        if ($c.olderH) { $lim = (Get-Date).AddHours(-1 * [double]$c.olderH) }
+        $dirs | Where-Object { -not $lim -or $_.LastWriteTime -lt $lim } | Sort-Object { $_.FullName.Length } -Descending | ForEach-Object {
+          if (-not (Get-ChildItem -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue)) { Remove-Item -LiteralPath $_.FullName -Force -ErrorAction SilentlyContinue }
         }
       }
     }

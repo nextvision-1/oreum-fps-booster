@@ -142,6 +142,7 @@ function paintStatus() {
     const s = STATUS[t.id] || { status: 'off' };
     for (const card of $$(`.item[data-id="${t.id}"]`)) {
       $('input', card).checked = s.status === 'on' || s.status === 'partial';
+      $('input', card).disabled = s.status === 'na';
       const b = $('.badge.st', card);
       b.className = 'badge st ' + (s.status === 'on' ? 'on' : s.status === 'partial' ? 'partial' : '');
       b.textContent = s.status === 'on' ? '적용됨' : s.status === 'partial' ? '일부 적용' : s.status === 'na' ? '해당 없음' : '미적용';
@@ -480,9 +481,9 @@ $('#btnCheck').addEventListener('click', () => withBusy('시스템을 검사하�
           if (r.fix.type === 'action') return runAction(r.fix.id);
           const t = META.tweaks.find((x) => x.id === r.fix.id);
           if (t) {
-            const fake = { checked: true };
-            await toggleTweak(t, true, fake);
-            if (fake.checked) { b.textContent = '적용됨'; b.disabled = true; }
+            await toggleTweak(t, true, { checked: true });
+            // 취소·실패 시에는 버튼을 그대로 둔다
+            if (STATUS[t.id]?.status === 'on') { b.textContent = '적용됨'; b.disabled = true; }
           }
         });
         row.appendChild(b);
@@ -506,16 +507,19 @@ async function loadStartup() {
       el.className = 'card item';
       el.innerHTML = `
         <div class="body">
-          <div class="title">${esc(it.name)} <span class="badge">${it.src === 'HKCU' ? '현재 사용자' : '모든 사용자'}</span></div>
+          <div class="title">${esc(it.name)} <span class="badge">${esc(it.label)}</span></div>
           <div class="cmd" title="${esc(it.cmd)}">${esc(it.cmd)}</div>
         </div>
         <label class="switch"><input type="checkbox" ${it.enabled ? 'checked' : ''} /><span class="slider"></span></label>`;
       $('input', el).addEventListener('change', async (e) => {
-        const en = e.target.checked;
-        await withBusy('변경 중…', async () => {
-          await call('startup:set', it, en);
+        const input = e.target;
+        const en = input.checked;
+        const ok = await withBusy('변경 중…', async () => {
+          await call('startup:set', { src: it.src, name: it.name }, en);
           toast(`${it.name}: 시작 시 실행 ${en ? '켜짐' : '꺼짐'}`);
+          return true;
         });
+        if (!ok) input.checked = !en; // 실패(권한 부족 등) 시 스위치를 원래대로
       });
       box.appendChild(el);
     }

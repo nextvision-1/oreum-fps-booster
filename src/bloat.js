@@ -56,9 +56,15 @@ foreach ($b in @($A.list)) {
 Emit @{ items = $out }
 `;
 
+// 목록(패턴)에 있는 설치 패키지만 제거한다. 다른 패키지 이름이 넘어와도 지우지 않는다.
 const BLOAT_REMOVE = String.raw`
+$pk = @(Get-AppxPackage -ErrorAction SilentlyContinue)
 $out = @()
 foreach ($f in @($A.list)) {
+  $p = $pk | Where-Object { $_.PackageFullName -eq $f } | Select-Object -First 1
+  $allowed = $false
+  if ($p -and -not $p.IsFramework -and -not $p.NonRemovable) { foreach ($pt in @($A.patterns)) { if ($p.Name -like $pt) { $allowed = $true } } }
+  if (-not $allowed) { $out += ,@{ full = $f; ok = $false; err = '제거 목록에 없거나 이미 제거된 앱입니다.' }; continue }
   try { Remove-AppxPackage -Package $f -ErrorAction Stop; $out += ,@{ full = $f; ok = $true } }
   catch { $out += ,@{ full = $f; ok = $false; err = $_.Exception.Message } }
 }

@@ -1,14 +1,26 @@
 const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
-const { runPS } = require('./ps');
+const os = require('os');
+const { runPS, OP_READ, OP_APPLY, OP_RESTORE } = require('./ps');
+const { arr, fmtMB, tweakStatus, driftIds, mergeOriginals, restoreOrder, createQueue } = require('./logic');
 const { CATEGORIES, TWEAKS, ACTIONS, reg } = require('./tweaks');
 const { CLEAN_GROUPS, CLEAN_ITEMS, CLEAN_LIB, CLEAN_SCAN, CLEAN_RUN, DRIVES } = require('./cleaner');
 const { CHECK_SCRIPT } = require('./checks');
 const { BLOAT, BLOAT_LIST, BLOAT_REMOVE } = require('./bloat');
+const { STARTUP_SRCS, STARTUP_LIST_SCRIPT, STARTUP_SET_SCRIPT } = require('./startup');
 const monitor = require('./monitor');
 
+// 스모크 테스트 모드: 실제 데이터 폴더·설정 감시를 건드리지 않고 화면이 오류 없이 뜨는지만 확인
+const SMOKE = process.env.OFB_SMOKE === '1';
+if (SMOKE) app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'ofb-smoke-')));
+
 let win;
+// 적용·복원·감시는 한 번에 하나씩. 진행 중에는 창을 닫지 못하게 해 백업 저장 전에 종료되는 것을 막는다
+const queue = createQueue();
+let pendingOps = 0;
+let relaunching = false;
+const exclusive = (fn) => { pendingOps++; return queue(fn).finally(() => { pendingOps--; }); };
 const DIR = () => app.getPath('userData');
 const STATE_FILE = () => path.join(DIR(), 'backup.json');
 const SNAP_DIR = () => path.join(DIR(), 'backups');
@@ -43,32 +55,6 @@ function send(ch, data) {
   if (win && !win.isDestroyed()) win.webContents.send(ch, data);
 }
 
-// ───────── 유틸 ─────────
-const arr = (x) => (x == null ? [] : Array.isArray(x) ? x : [x]);
-const fmtMB = (b) => (b >= 1073741824 ? (b / 1073741824).toFixed(2) + ' GB' : (b / 1048576).toFixed(1) + ' MB');
-
-function normVal(kind, v) {
-  if (kind === 'DWord' || kind === 'QWord') {
-    let n = Number(v);
-    if (kind === 'DWord' && n > 2147483647) n -= 4294967296;
-    return String(n);
-  }
-  if (Array.isArray(v)) return v.join('\n');
-  return String(v);
-}
-
-function opMatches(op, cur) {
-  if (!cur) return false;
-  switch (op.t) {
-    case 'reg': return !!cur.exists && normVal(op.kind, op.value) === normVal(cur.kind, cur.value);
-    case 'svc': return !cur.exists || Number(cur.start) === op.start; // 서비스가 없으면 목적 달성
-    case 'power': return /Oreum FPS Ultimate|8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c|e9a42b02-d5df-448d-aa00-03f14749eb61/i.test(cur.line || '');
-    case 'pcfg': return !!cur.exists && Number(cur.ac) === op.value;
-    case 'key': return !!cur.leaf;
-    default: return false;
-  }
-}
-
 let nagleCache = null;
 async function resolveOps(t) {
   if (t.dynamic === 'nagle') {
@@ -94,36 +80,6 @@ Emit @{ list = $l }
   return t.ops;
 }
 
-const READ_SCRIPT = String.raw`
-$out = @()
-foreach ($o in @($A.ops)) {
-  try { $out += ,@{ ok = $true; cur = (OpRead $o) } } catch { $out += ,@{ ok = $false; err = $_.Exception.Message } }
-}
-Emit @{ results = $out }
-`;
-
-const APPLY_SCRIPT = String.raw`
-$out = @()
-foreach ($o in @($A.ops)) {
-  $before = $null
-  try {
-    OpPrepare $o
-    $before = OpRead $o
-    OpApply $o
-    $out += ,@{ ok = $true; before = $before }
-  } catch { $out += ,@{ ok = $false; before = $before; err = $_.Exception.Message } }
-}
-Emit @{ results = $out }
-`;
-
-const RESTORE_SCRIPT = String.raw`
-$out = @()
-foreach ($i in @($A.items)) {
-  try { OpRestore $i.op $i.before; $out += ,@{ ok = $true } } catch { $out += ,@{ ok = $false; err = $_.Exception.Message } }
-}
-Emit @{ results = $out }
-`;
-
 // ───────── 최적화 적용/복원 ─────────
 async function getStatus() {
   const state = loadState();
@@ -135,15 +91,10 @@ async function getStatus() {
     list.push({ t, start: allOps.length, count: ops.length, ops });
     allOps.push(...ops);
   }
-  const res = arr((await runPS(READ_SCRIPT, { ops: allOps })).results);
+  const res = arr((await runPS(OP_READ, { ops: allOps })).results);
   const out = {};
   for (const { t, start, count, ops } of list) {
-    let hit = 0;
-    for (let i = 0; i < count; i++) if (res[start + i]?.ok && opMatches(ops[i], res[start + i].cur)) hit++;
-    out[t.id] = {
-      status: count === 0 ? 'na' : hit === count ? 'on' : hit === 0 ? 'off' : 'partial',
-      backedUp: !!state.tweaks[t.id],
-    };
+    out[t.id] = { status: tweakStatus(ops, res.slice(start, start + count)), backedUp: !!state.tweaks[t.id] };
   }
   return out;
 }
@@ -164,12 +115,18 @@ async function applyTweaks(ids, { silent = false } = {}) {
     allOps.push(...ops);
   }
   if (!allOps.length) return { applied: [], errors: ['적용할 항목이 없습니다.'] };
-  const res = arr((await runPS(APPLY_SCRIPT, { ops: allOps })).results);
+  const res = arr((await runPS(OP_APPLY, { ops: allOps })).results);
   const applied = [];
   const errors = [];
   for (const { t, start, ops } of plan) {
-    const originals = ops.map((op, i) => ({ op, before: res[start + i]?.before ?? { exists: false } }));
-    if (!state.tweaks[t.id]) state.tweaks[t.id] = { name: t.name, appliedAt: new Date().toISOString(), originals };
+    // 적용 전 값을 읽지 못했으면 null 로 남겨 복원 시 건너뛴다
+    const originals = ops.map((op, i) => ({ op, before: res[start + i]?.before ?? null }));
+    const prev = state.tweaks[t.id];
+    if (!prev) state.tweaks[t.id] = { name: t.name, appliedAt: new Date().toISOString(), originals };
+    else {
+      prev.originals = mergeOriginals(prev.originals, originals);
+      if (!silent) delete prev.stuck; // 사용자가 직접 다시 적용하면 감시 대상으로 복귀
+    }
     ops.forEach((_, i) => { if (!res[start + i]?.ok) errors.push(`${t.name}: ${res[start + i]?.err || '실패'}`); });
     applied.push(t.id);
   }
@@ -184,21 +141,27 @@ async function applyTweaks(ids, { silent = false } = {}) {
 
 async function revertTweaks(ids) {
   const state = loadState();
-  const items = [];
-  const done = [];
+  let items = [];
   const missing = [];
   for (const id of ids) {
     const b = state.tweaks[id];
     if (!b) { missing.push(TWEAKS.find((x) => x.id === id)?.name || id); continue; }
-    items.push(...[...b.originals].reverse());
-    done.push(id);
+    items.push(...[...b.originals].reverse().map((o) => ({ ...o, id })));
   }
+  items = restoreOrder(items);
   const errors = [];
+  const failed = {}; // id → 복원에 실패한 원래 값들 (백업에서 지우지 않고 남긴다)
   if (items.length) {
-    const r = await runPS(RESTORE_SCRIPT, { items });
-    arr(r.results).forEach((x) => { if (!x.ok) errors.push(x.err); });
+    const res = arr((await runPS(OP_RESTORE, { items: items.map(({ op, before }) => ({ op, before })) })).results);
+    items.forEach((it, i) => {
+      if (res[i]?.ok) return;
+      errors.push(`${state.tweaks[it.id].name}: ${res[i]?.err || '실패'}`);
+      (failed[it.id] ||= []).push({ op: it.op, before: it.before });
+    });
   }
+  const done = [...new Set(ids)].filter((id) => state.tweaks[id] && !failed[id]);
   for (const id of done) delete state.tweaks[id];
+  for (const id of Object.keys(failed)) state.tweaks[id].originals = failed[id].reverse();
   saveState(state, 'restore');
   if (done.length) addHistory('restore', `${done.length}개 항목을 원래대로 복원`);
   return { reverted: done, missing, errors };
@@ -206,19 +169,32 @@ async function revertTweaks(ids) {
 
 // ───────── 설정 유지 감시 ─────────
 // Windows 업데이트 등으로 설정이 되돌아가면, 이 프로그램이 적용했던 항목을 다시 적용한다.
+// 재적용해도 적용되지 않는 항목(권한 부족, Windows 가 값을 바꿔 저장하는 경우 등)은 stuck 으로 표시해
+// 10분마다 같은 항목을 끝없이 재적용·기록하지 않게 한다. 사용자가 직접 다시 적용하면 해제된다.
 let guardBusy = false;
 async function runGuard() {
   if (guardBusy || !loadSettings().guard) return { reapplied: [] };
   guardBusy = true;
   try {
-    const st = await getStatus();
-    const drift = TWEAKS.filter((t) => st[t.id]?.backedUp && (st[t.id].status === 'off' || st[t.id].status === 'partial')).map((t) => t.id);
-    if (!drift.length) return { reapplied: [] };
-    await applyTweaks(drift, { silent: true });
-    const names = TWEAKS.filter((t) => drift.includes(t.id)).map((t) => t.name);
-    addHistory('guard', `되돌아간 설정 ${names.length}개 자동 재적용: ${names.join(', ')}`);
-    send('guard', names);
-    return { reapplied: names };
+    return await exclusive(async () => {
+      const drift = driftIds(TWEAKS, loadState().tweaks, await getStatus());
+      if (!drift.length) return { reapplied: [] };
+      await applyTweaks(drift, { silent: true });
+      const after = await getStatus();
+      const fixed = drift.filter((id) => after[id]?.status === 'on');
+      const stuck = drift.filter((id) => after[id]?.status !== 'on');
+      if (stuck.length) {
+        const state = loadState();
+        stuck.forEach((id) => { if (state.tweaks[id]) state.tweaks[id].stuck = true; });
+        saveState(state);
+      }
+      const names = TWEAKS.filter((t) => fixed.includes(t.id)).map((t) => t.name);
+      if (names.length) {
+        addHistory('guard', `되돌아간 설정 ${names.length}개 자동 재적용: ${names.join(', ')}`);
+        send('guard', names);
+      }
+      return { reapplied: names, stuck };
+    });
   } finally {
     guardBusy = false;
   }
@@ -253,8 +229,12 @@ Emit @{ msg = '탐색기를 다시 시작했습니다.' }
 `,
   restorePoint: String.raw`
 try { Enable-ComputerRestore -Drive ($env:SystemDrive + '\') -ErrorAction SilentlyContinue } catch {}
-New-ItemProperty -LiteralPath 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore' -Name SystemRestorePointCreationFrequency -PropertyType DWord -Value 0 -Force | Out-Null
-Checkpoint-Computer -Description 'Oreum FPS Booster' -RestorePointType MODIFY_SETTINGS
+# 24시간에 1개 제한을 잠시 풀었다가 원래 값으로 돌려 놓는다
+$k = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\SystemRestore'
+$prev = RG $k 'SystemRestorePointCreationFrequency'
+RS $k 'SystemRestorePointCreationFrequency' 'DWord' 0
+try { Checkpoint-Computer -Description 'Oreum FPS Booster' -RestorePointType MODIFY_SETTINGS }
+finally { if ($prev.exists) { RS $k 'SystemRestorePointCreationFrequency' $prev.kind $prev.value } else { RDel $k 'SystemRestorePointCreationFrequency' } }
 Emit @{ msg = '시스템 복원 지점을 만들었습니다.' }
 `,
   sfc: String.raw`
@@ -283,41 +263,21 @@ Emit @{
 }
 `;
 
-const STARTUP_SRCS = [
-  { src: 'HKCU', run: 'Registry::HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Run', ap: 'Registry::HKEY_CURRENT_USER\\Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run' },
-  { src: 'HKLM', run: 'Registry::HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Run', ap: 'Registry::HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run' },
-  { src: 'HKLM32', run: 'Registry::HKEY_LOCAL_MACHINE\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Run', ap: 'Registry::HKEY_LOCAL_MACHINE\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Explorer\\StartupApproved\\Run32' },
-];
-
-const STARTUP_LIST_SCRIPT = String.raw`
-$res = @()
-foreach ($s in @($A.srcs)) {
-  if (-not (Test-Path -LiteralPath $s.run)) { continue }
-  $k = Get-Item -LiteralPath $s.run
-  foreach ($n in $k.GetValueNames()) {
-    if ($n -eq '') { continue }
-    $en = $true
-    $a = RG $s.ap $n
-    if ($a.exists -and $a.kind -eq 'Binary') { $b = [Convert]::FromBase64String($a.value); if ($b.Length -gt 0 -and ($b[0] % 2) -eq 1) { $en = $false } }
-    $res += ,@{ src = $s.src; name = $n; cmd = [string]$k.GetValue($n); enabled = $en; ap = $s.ap }
-  }
-}
-Emit @{ items = $res }
-`;
-
-const STARTUP_SET_SCRIPT = String.raw`
-$b = New-Object byte[] 12
-if ($A.enabled) { $b[0] = 2 } else { $b[0] = 3; [BitConverter]::GetBytes([DateTime]::Now.ToFileTime()).CopyTo($b, 4) }
-RS $A.ap $A.name 'Binary' ([Convert]::ToBase64String($b))
-Emit @{ ok = $true }
-`;
-
 // ───────── 관리자 재실행 ─────────
 async function relaunchAsAdmin() {
+  // 새로 뜨는 관리자 창이 단일 실행 잠금에 막히지 않도록 먼저 잠금을 푼다
+  app.releaseSingleInstanceLock();
   const exe = process.env.PORTABLE_EXECUTABLE_FILE || process.execPath;
-  const args = app.isPackaged ? [] : [app.getAppPath()];
-  const argList = args.map((a) => `'"${a.replace(/'/g, "''")}"'`).join(',');
-  await runPS(`Start-Process -FilePath '${exe.replace(/'/g, "''")}' ${argList ? '-ArgumentList ' + argList : ''} -Verb RunAs\nEmit @{ ok = $true }`);
+  const args = app.isPackaged ? [] : ['"' + app.getAppPath() + '"'];
+  try {
+    await runPS(String.raw`
+if (@($A.args).Count) { Start-Process -FilePath $A.exe -ArgumentList @($A.args) -Verb RunAs } else { Start-Process -FilePath $A.exe -Verb RunAs }
+Emit @{ ok = $true }`, { exe, args });
+  } catch (e) {
+    app.requestSingleInstanceLock(); // UAC 취소 등으로 실패하면 잠금을 되찾는다
+    throw new Error('관리자 권한으로 다시 실행하지 못했습니다. (' + e.message + ')');
+  }
+  relaunching = true;
   app.quit();
 }
 
@@ -339,9 +299,9 @@ handle('meta', () => ({
 }));
 handle('sysinfo', () => runPS(SYSINFO_SCRIPT));
 handle('status', () => getStatus());
-handle('apply', (ids) => applyTweaks(arr(ids)));
-handle('revert', (ids) => revertTweaks(arr(ids)));
-handle('revertAll', () => revertTweaks(Object.keys(loadState().tweaks)));
+handle('apply', (ids) => exclusive(() => applyTweaks(arr(ids))));
+handle('revert', (ids) => exclusive(() => revertTweaks(arr(ids))));
+handle('revertAll', () => exclusive(() => revertTweaks(Object.keys(loadState().tweaks))));
 handle('action', async (id) => {
   const s = ACTION_SCRIPTS[id];
   if (!s) throw new Error('알 수 없는 작업');
@@ -371,7 +331,8 @@ handle('check:run', async () => {
 
 handle('bloat:list', async () => arr((await runPS(BLOAT_LIST, { list: BLOAT })).items));
 handle('bloat:remove', async (fulls) => {
-  const res = arr((await runPS(BLOAT_REMOVE, { list: arr(fulls) }, { timeout: 15 * 60 * 1000 })).results);
+  const patterns = BLOAT.map((x) => x.pattern);
+  const res = arr((await runPS(BLOAT_REMOVE, { list: arr(fulls).map(String), patterns }, { timeout: 15 * 60 * 1000 })).results);
   const ok = res.filter((r) => r.ok).length;
   if (ok) addHistory('bloat', `기본 앱 ${ok}개 제거`);
   return res;
@@ -379,7 +340,10 @@ handle('bloat:remove', async (fulls) => {
 
 handle('startup:list', async () => arr((await runPS(STARTUP_LIST_SCRIPT, { srcs: STARTUP_SRCS })).items));
 handle('startup:set', async (item, enabled) => {
-  await runPS(STARTUP_SET_SCRIPT, { ap: item.ap, name: item.name, enabled: !!enabled });
+  // 렌더러가 넘긴 경로를 그대로 쓰지 않고, 알려진 위치에서만 고른다
+  const src = STARTUP_SRCS.find((x) => x.src === item?.src);
+  if (!src || !item.name) throw new Error('알 수 없는 시작 프로그램');
+  await runPS(STARTUP_SET_SCRIPT, { ap: src.ap, name: String(item.name), enabled: !!enabled });
   addHistory('startup', `시작 프로그램 "${item.name}" ${enabled ? '켜기' : '끄기'}`);
   return true;
 });
@@ -388,9 +352,14 @@ handle('backup:info', () => Object.entries(loadState().tweaks).map(([id, v]) => 
 handle('backup:open', () => { fs.mkdirSync(SNAP_DIR(), { recursive: true }); return shell.openPath(DIR()); });
 handle('history', () => readJSON(HISTORY_FILE(), []).slice(0, 50));
 handle('settings:get', () => loadSettings());
-handle('settings:set', (patch) => { const s = { ...loadSettings(), ...patch }; writeJSON(SETTINGS_FILE(), s); return s; });
+handle('settings:set', (patch) => {
+  const s = loadSettings();
+  if (patch && typeof patch.guard === 'boolean') s.guard = patch.guard;
+  writeJSON(SETTINGS_FILE(), s);
+  return s;
+});
 handle('guard:run', () => runGuard());
-handle('admin:relaunch', () => relaunchAsAdmin());
+handle('admin:relaunch', () => exclusive(() => relaunchAsAdmin()));
 handle('confirm', async (msg) => {
   const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['확인', '취소'], defaultId: 0, cancelId: 1, title: 'Oreum FPS Booster', message: msg });
   return r.response === 0;
@@ -414,15 +383,79 @@ function createWindow() {
       sandbox: true,
     },
   });
+  // 외부 페이지로 이동하거나 새 창을 여는 것을 막는다
+  win.on('close', (e) => {
+    if (pendingOps > 0 && !relaunching && !SMOKE) {
+      e.preventDefault();
+      dialog.showMessageBox(win, { type: 'warning', title: 'Oreum FPS Booster', message: '설정을 적용·복원하는 중입니다. 끝난 뒤에 닫아 주세요.' });
+    }
+  });
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  win.webContents.on('will-navigate', (e) => e.preventDefault());
   win.loadFile(path.join(__dirname, 'renderer', 'index.html'));
   win.webContents.once('did-finish-load', () => {
     monitor.start((m) => send('monitor', m));
+    if (SMOKE) return runSmoke();
     // 시작 30초 뒤 한 번, 이후 10분마다 설정 유지 감시
     setTimeout(() => runGuard().catch(() => {}), 30 * 1000);
     setInterval(() => runGuard().catch(() => {}), 10 * 60 * 1000);
   });
 }
 
-app.whenReady().then(createWindow);
+// ───────── 스모크 테스트 (npm run smoke) ─────────
+// 화면을 띄워 모든 페이지를 한 번씩 열어 보고 렌더러 오류가 없는지 확인한 뒤 종료한다. 설정은 바꾸지 않는다.
+const smokeErrors = [];
+function smokeExit(report) {
+  process.stdout.write('@@SMOKE@@' + JSON.stringify({ report, errors: smokeErrors }) + '\n');
+  app.exit(smokeErrors.length || !report || report.toastErr ? 1 : 0);
+}
+async function runSmoke() {
+  const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+  const js = (code) => win.webContents.executeJavaScript(code);
+  let report = null;
+  try {
+    const ready = 'typeof META !== "undefined" && !!META && document.getElementById("busy").classList.contains("hidden")';
+    for (let i = 0; i < 120 && !(await js(ready)); i++) await wait(500);
+    for (const p of ['optimize', 'cleaner', 'check', 'startup', 'bloat', 'personal', 'backup', 'history', 'dash']) {
+      await js(`goto('${p}')`);
+      await wait(p === 'bloat' || p === 'startup' ? 6000 : 800);
+    }
+    await wait(3000);
+    report = await js(`({
+      version: META.version,
+      tweakCards: document.querySelectorAll('#optList .item').length,
+      personalCards: document.querySelectorAll('#personalList .item').length,
+      cleanItems: document.querySelectorAll('#cleanGroups .cb').length,
+      statusKeys: Object.keys(STATUS).length,
+      startupRows: document.querySelectorAll('#startupList .item').length,
+      startupLabels: [...new Set([...document.querySelectorAll('#startupList .badge')].map((b) => b.textContent))],
+      bloatText: document.getElementById('bloatList').innerText.slice(0, 80),
+      cpuTile: document.querySelector('#monitor .tile[data-m=cpu] .v').innerText,
+      sysCpu: document.getElementById('sCpu').innerText,
+      score: document.getElementById('scoreText').innerText,
+      toastErr: document.getElementById('toast').classList.contains('err') && !document.getElementById('toast').classList.contains('hidden') ? document.getElementById('toast').innerText : '',
+    })`);
+  } catch (e) {
+    smokeErrors.push('smoke: ' + e.message);
+  }
+  smokeExit(report);
+}
+
+// 두 번 실행되면 감시·모니터가 중복되므로 기존 창을 앞으로 가져온다
+if (!SMOKE && !app.requestSingleInstanceLock()) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.focus(); }
+  });
+  app.whenReady().then(() => {
+    createWindow();
+    if (SMOKE) {
+      win.webContents.on('console-message', (_e, level, message, line, sourceId) => { if (level >= 3) smokeErrors.push(`${message} (${sourceId}:${line})`); });
+      win.webContents.on('render-process-gone', (_e, d) => smokeErrors.push('renderer gone: ' + d.reason));
+      setTimeout(() => { smokeErrors.push('timeout'); smokeExit(null); }, 150 * 1000);
+    }
+  });
+}
 app.on('before-quit', () => monitor.stop());
 app.on('window-all-closed', () => { monitor.stop(); app.quit(); });

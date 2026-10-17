@@ -32,7 +32,8 @@ function RS($path, $name, $kind, $value) {
   New-ItemProperty -LiteralPath $path -Name $name -PropertyType $kind -Value $value -Force | Out-Null
 }
 
-function RD($path, $name) {
+# 주의: RD 는 PowerShell 내장 별칭(Remove-Item)이 함수보다 우선하므로 쓰면 안 된다
+function RDel($path, $name) {
   if (Test-Path -LiteralPath $path) { Remove-ItemProperty -LiteralPath $path -Name $name -ErrorAction SilentlyContinue }
 }
 
@@ -50,49 +51,74 @@ function SS($name, $start, $delayed) {
   $m = $map[[int]$start]
   if ([int]$start -eq 2 -and [int]$delayed -eq 1) { $m = 'delayed-auto' }
   & sc.exe config $name start= $m | Out-Null
+  # sc.exe 는 실패해도 예외를 내지 않으므로 종료 코드로 확인 (5 = 권한 없음)
+  if ($LASTEXITCODE -ne 0) { throw ('서비스 ' + $name + ' 설정 실패 (코드 ' + $LASTEXITCODE + ')') }
   if ([int]$start -eq 4) { Stop-Service -Name $name -Force -ErrorAction SilentlyContinue }
 }
 
+# powercfg 실행: 실패 시 예외. -Quiet 이면 실패를 무시하고 $false 반환
+# (Stop 모드에서 네이티브 stderr 를 2>&1 로 받으면 PS 5.1 이 곧바로 예외를 던지므로 이 함수 안에서만 Continue)
+function PC {
+  $quiet = $false
+  $a = @()
+  foreach ($x in $args) { if ([string]$x -eq '-Quiet') { $quiet = $true } else { $a += $x } }
+  $ErrorActionPreference = 'Continue'
+  $o = (@(& powercfg.exe @a 2>&1) | ForEach-Object { [string]$_ }) -join [Environment]::NewLine
+  if ($LASTEXITCODE -ne 0) {
+    if ($quiet) { return $false }
+    throw ('powercfg ' + $a[0] + ' 실패: ' + $o.Trim())
+  }
+  return $o
+}
+
+$script:GUIDRX = '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
+
 function PG() {
-  $o = (powercfg /getactivescheme) | Out-String
+  $o = [string](PC /getactivescheme)
   $g = $null
-  if ($o -match '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})') { $g = $matches[1] }
+  if ($o -match $script:GUIDRX) { $g = $matches[1] }
   return @{ exists = $true; guid = $g; line = $o.Trim() }
 }
 
 function PApply() {
-  $rx = '([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})'
-  $existing = (powercfg /list) | Where-Object { $_ -match 'Oreum FPS Ultimate' } | Select-Object -First 1
-  if ($existing -and ($existing -match $rx)) { $g = $matches[1]; powercfg -setactive $g | Out-Null; return $g }
-  $o = (powercfg -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61 2>&1) | Out-String
-  if ($o -match $rx) {
+  $existing = @((PC /list) -split '\r?\n') | Where-Object { $_ -match 'Oreum FPS Ultimate' } | Select-Object -First 1
+  if ($existing -and ($existing -match $script:GUIDRX)) { $g = $matches[1]; PC -setactive $g | Out-Null; return $g }
+  # "최고의 성능" 계획이 없는 에디션(일부 노트북·Modern Standby)은 고성능 계획으로 대체
+  $o = PC -Quiet -duplicatescheme e9a42b02-d5df-448d-aa00-03f14749eb61
+  if ($o -and ($o -match $script:GUIDRX)) {
     $g = $matches[1]
-    powercfg -changename $g 'Oreum FPS Ultimate' | Out-Null
-    powercfg -setactive $g | Out-Null
+    PC -changename $g 'Oreum FPS Ultimate' | Out-Null
+    PC -setactive $g | Out-Null
     return $g
   }
-  powercfg -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c | Out-Null
+  PC -setactive 8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c | Out-Null
   return '8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c'
 }
 
-# 전원 계획 세부 설정 (현재 활성 계획)
+# 전원 계획 세부 설정. 읽을 때 어느 계획의 값인지(scheme)도 기록해, 복원할 때 그 계획에 되돌린다.
+# (전원 계획을 바꾼 뒤 세부 설정을 복원하면 엉뚱한 계획에 원래 값이 들어가는 문제 방지)
 function PCG($sub, $set) {
-  $o = (powercfg /query SCHEME_CURRENT $sub $set) | Out-String
+  # 조회 실패는 "값 없음"이 아니라 오류로 처리한다. 그래야 적용 전 값이 null 로 남아 적용 자체를 건너뛰고,
+  # 원래 값을 모른 채 바꿔 버려 복원할 수 없게 되는 일을 막는다.
+  $g = (PG).guid
+  if (-not $g) { throw '현재 전원 계획을 확인할 수 없습니다.' }
+  $o = PC /query $g $sub $set
   $m = [regex]::Matches($o, '0x([0-9a-fA-F]{8})')
   if ($m.Count -ge 2) {
-    return @{ exists = $true; ac = [Convert]::ToInt64($m[$m.Count - 2].Groups[1].Value, 16); dc = [Convert]::ToInt64($m[$m.Count - 1].Groups[1].Value, 16) }
+    return @{ exists = $true; scheme = $g; ac = [Convert]::ToInt64($m[$m.Count - 2].Groups[1].Value, 16); dc = [Convert]::ToInt64($m[$m.Count - 1].Groups[1].Value, 16) }
   }
-  return @{ exists = $false }
+  return @{ exists = $false; scheme = $g }
 }
-function PCS($sub, $set, $ac, $dc) {
-  powercfg /setacvalueindex SCHEME_CURRENT $sub $set $ac | Out-Null
-  powercfg /setdcvalueindex SCHEME_CURRENT $sub $set $dc | Out-Null
-  powercfg /setactive SCHEME_CURRENT | Out-Null
+function PCS($scheme, $sub, $set, $ac, $dc) {
+  if (-not $scheme) { $scheme = 'SCHEME_CURRENT' }
+  PC /setacvalueindex $scheme $sub $set $ac | Out-Null
+  PC /setdcvalueindex $scheme $sub $set $dc | Out-Null
+  PC /setactive SCHEME_CURRENT | Out-Null
 }
 
 function OpPrepare($o) {
-  # 숨겨진 전원 설정(코어 파킹 등)은 표시 상태로 바꿔야 조회/변경 가능
-  if ($o.t -eq 'pcfg') { powercfg -attributes $o.sub $o.set -ATTRIB_HIDE 2>&1 | Out-Null }
+  # 숨겨진 전원 설정(코어 파킹 등)은 표시 상태로 바꿔야 조회/변경 가능. 실패해도 진행
+  if ($o.t -eq 'pcfg') { PC -Quiet -attributes $o.sub $o.set -ATTRIB_HIDE | Out-Null }
 }
 
 function OpRead($o) {
@@ -110,20 +136,56 @@ function OpApply($o) {
     'reg'   { RS $o.path $o.name $o.kind $o.value }
     'svc'   { SS $o.name $o.start 0 }
     'power' { PApply | Out-Null }
-    'pcfg'  { PCS $o.sub $o.set $o.value $o.value }
+    'pcfg'  { PCS 'SCHEME_CURRENT' $o.sub $o.set $o.value $o.value }
     'key'   { if (-not (Test-Path -LiteralPath $o.path)) { New-Item -Path $o.path -Force | Out-Null }; Set-Item -LiteralPath $o.path -Value ([string]$o.value) }
   }
 }
 
 function OpRestore($o, $b) {
   switch ($o.t) {
-    'reg'   { if ($b.exists) { RS $o.path $o.name $b.kind $b.value } else { RD $o.path $o.name } }
+    'reg'   { if ($b.exists) { RS $o.path $o.name $b.kind $b.value } else { RDel $o.path $o.name } }
     'svc'   { if ($b.exists) { SS $o.name $b.start $b.delayed } }
-    'power' { if ($b.guid) { powercfg -setactive $b.guid | Out-Null } }
-    'pcfg'  { if ($b.exists) { PCS $o.sub $o.set $b.ac $b.dc } }
-    'key'   { if (-not $b.exists -and (Test-Path -LiteralPath $o.root)) { Remove-Item -LiteralPath $o.root -Recurse -Force } }
+    'power' { if ($b.guid) { PC -setactive $b.guid | Out-Null } }
+    'pcfg'  { if ($b.exists) { PCS $b.scheme $o.sub $o.set $b.ac $b.dc } }
+    'key'   {
+      # 상위 키가 원래 없었으면 통째로, 있었으면 새로 만든 하위 키만 지운다
+      if (-not $b.exists) { if (Test-Path -LiteralPath $o.root) { Remove-Item -LiteralPath $o.root -Recurse -Force } }
+      elseif (-not $b.leaf -and (Test-Path -LiteralPath $o.path)) { Remove-Item -LiteralPath $o.path -Recurse -Force }
+    }
   }
 }
+`;
+
+const OP_READ = String.raw`
+$out = @()
+foreach ($o in @($A.ops)) {
+  try { $out += ,@{ ok = $true; cur = (OpRead $o) } } catch { $out += ,@{ ok = $false; err = $_.Exception.Message } }
+}
+Emit @{ results = $out }
+`;
+
+const OP_APPLY = String.raw`
+$out = @()
+foreach ($o in @($A.ops)) {
+  $before = $null
+  try {
+    OpPrepare $o
+    $before = OpRead $o
+    OpApply $o
+    $out += ,@{ ok = $true; before = $before }
+  } catch { $out += ,@{ ok = $false; before = $before; err = $_.Exception.Message } }
+}
+Emit @{ results = $out }
+`;
+
+const OP_RESTORE = String.raw`
+$out = @()
+foreach ($i in @($A.items)) {
+  # 적용 전 값을 읽지 못한 연산은 건드리지 않는다 (없던 값으로 오인해 지우는 사고 방지)
+  if ($null -eq $i.before) { $out += ,@{ ok = $true; skipped = $true }; continue }
+  try { OpRestore $i.op $i.before; $out += ,@{ ok = $true } } catch { $out += ,@{ ok = $false; err = $_.Exception.Message } }
+}
+Emit @{ results = $out }
 `;
 
 function argsBlock(args) {
@@ -164,4 +226,4 @@ function runPS(body, args = {}, { timeout = 180000 } = {}) {
   });
 }
 
-module.exports = { runPS };
+module.exports = { runPS, PSLIB, OP_READ, OP_APPLY, OP_RESTORE };

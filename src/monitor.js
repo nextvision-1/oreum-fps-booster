@@ -22,9 +22,12 @@ while ($true) {
 `;
 
 let proc = null;
+let stopped = false;
+let restartTimer = null;
 
 function start(onData) {
   if (proc || process.platform !== 'win32') return;
+  stopped = false;
   const encoded = Buffer.from(LOOP, 'utf16le').toString('base64');
   proc = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', encoded], { windowsHide: true });
   let buf = '';
@@ -45,10 +48,21 @@ function start(onData) {
       } catch (_) {}
     }
   });
-  proc.on('exit', () => { proc = null; });
+  // PowerShell 이 죽거나 아예 시작되지 못하면(백신·정책 차단 등) 5초 뒤 다시 띄워 그래프가 멈추지 않게 한다.
+  // 'error' 를 처리하지 않으면 메인 프로세스가 죽고, 시작 실패 시에는 'exit' 가 오지 않을 수 있다.
+  const me = proc;
+  const ended = () => {
+    if (proc !== me) return; // 이미 정리됐거나 새 프로세스로 바뀜
+    proc = null;
+    if (!stopped) { clearTimeout(restartTimer); restartTimer = setTimeout(() => start(onData), 5000); }
+  };
+  me.on('error', ended);
+  me.on('exit', ended);
 }
 
 function stop() {
+  stopped = true;
+  clearTimeout(restartTimer);
   if (proc) { try { proc.kill(); } catch (_) {} proc = null; }
 }
 
