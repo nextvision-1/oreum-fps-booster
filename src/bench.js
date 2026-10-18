@@ -266,6 +266,6 @@ async function measureGame({ pid, name, seconds, delay, label, progress }) {
 
 module.exports = {
   SYSTEM_METRICS, GAME_METRICS, loadRuns, saveRuns,
-  runSystemBench, runGameBench, listGameProcs, pmFind,
+  runSystemBench, runGameBench, listGameProcs, pmFind, pmVerify,
   isRunning: () => running || gameRunning,
 };

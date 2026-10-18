@@ -28,6 +28,12 @@ Windows 게임 FPS·입력 지연 최적화 프로그램 (Electron). 모든 변�
 - 앱은 시작 15초 뒤와 6시간마다 확인합니다 (백업·복원 메뉴에서 끌 수 있음). 내려받기·설치는 사용자가 눌렀을 때만 합니다.
 - 내려받은 파일은 `latest.yml` 의 SHA-512 로 검증합니다. 코드 서명 인증서를 적용하면 `build.win.publisherName` 을 지정해 서명까지 검증하는 것을 권장합니다.
 
+## 자가진단 (실제 PC 검증)
+`OreumFPSBooster-...-portable.exe` 와 `자가진단.bat` 을 같은 폴더에 두고 `자가진단.bat` 실행 (빌드.bat 이 dist 에 함께 복사).
+- 복원 지점을 만든 뒤 최적화를 모두 적용 → 상태 확인 → 모두 되돌리기 → **원래 값과 항목별로 비교**. 이미 적용해 둔 항목은 건드리지 않습니다.
+- 시스템 검사, 청소 스캔(삭제 없음), PresentMon 서명, 업데이트 확인, 시스템 벤치마크도 실행합니다.
+- 결과는 바탕화면 `OreumFPSBooster-자가진단-날짜.txt` (시작 전 원래 값은 `...-원래값.json`). 적용 왕복을 빼려면 `--self-test --no-apply`.
+
 ## 기능
 | 메뉴 | 내용 |
 |---|---|
@@ -69,6 +75,7 @@ src/monitor.js   실시간 성능 모니터
 src/bench.js     전/후 비교 벤치마크·PresentMon 게임 FPS
 src/bench-stats.js  PresentMon CSV 해석·프레임 통계 (테스트 대상)
 src/updater.js   자동 업데이트 (electron-updater, GitHub Releases)
+src/selftest.js  자가진단 모드 (--self-test)
 src/renderer/gpu-bench.js  그래픽 테스트(WebGL2 고정 장면)
 tools/           PresentMon.exe (빌드.bat 이 자동 다운로드)
 src/preload.js   렌더러 ↔ 메인 안전 브리지

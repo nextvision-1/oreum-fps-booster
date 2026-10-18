@@ -17,6 +17,7 @@ if exist tools\PresentMon.exe (
 )
 call npm install || (pause & exit /b 1)
 call npm run build || (pause & exit /b 1)
+copy /y 자가진단.bat dist\ >nul
 echo.
 echo 완료! dist 폴더에 portable.exe 와 setup.exe 가 생성되었습니다.
 explorer dist

@@ -19,6 +19,8 @@ app.commandLine.appendSwitch('disable-gpu-vsync');
 
 // 스모크 테스트 모드: 실제 데이터 폴더·설정 감시를 건드리지 않고 화면이 오류 없이 뜨는지만 확인
 const SMOKE = process.env.OFB_SMOKE === '1';
+// 자가진단 모드 (exe --self-test): 창 없이 실제 PC 에서 적용·복원 왕복 등을 검사하고 바탕화면에 보고서를 남긴다
+const SELFTEST = process.argv.includes('--self-test');
 if (SMOKE) app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'ofb-smoke-')));
 
 let win;
@@ -508,7 +510,15 @@ if (!SMOKE && !app.requestSingleInstanceLock()) {
   app.on('second-instance', () => {
     if (win && !win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.focus(); }
   });
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
+    if (SELFTEST) {
+      const { runSelfTest } = require('./selftest');
+      const failures = await runSelfTest({
+        TWEAKS, ACTION_SCRIPTS, CHECK_SCRIPT, CLEAN_ITEMS, CLEAN_LIB, CLEAN_SCAN, bench, updater,
+        loadState, resolveOps, getStatus, applyTweaks, revertTweaks, exclusive,
+      }).catch((e) => { console.error(e); return 1; });
+      return app.exit(failures ? 1 : 0);
+    }
     createWindow();
     if (SMOKE) {
       win.webContents.on('console-message', (_e, level, message, line, sourceId) => { if (level >= 3) smokeErrors.push(`${message} (${sourceId}:${line})`); });
@@ -518,4 +528,8 @@ if (!SMOKE && !app.requestSingleInstanceLock()) {
   });
 }
 app.on('before-quit', () => monitor.stop());
-app.on('window-all-closed', () => { monitor.stop(); app.quit(); });
+app.on('window-all-closed', () => {
+  if (SELFTEST) return; // 자가진단 중 벤치마크 창이 닫혀도 종료하지 않음
+  monitor.stop();
+  app.quit();
+});
