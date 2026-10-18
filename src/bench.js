@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { runPS } = require('./ps');
+const { parseCsv, frameStats } = require('./bench-stats');
 
 const BENCH_FILE = () => path.join(app.getPath('userData'), 'bench.json');
 const loadRuns = () => { try { return JSON.parse(fs.readFileSync(BENCH_FILE(), 'utf8')); } catch (_) { return []; } };
@@ -105,7 +106,7 @@ function gpuTest(seconds) {
 // ───────── 시스템 벤치마크 ─────────
 let running = false;
 async function runSystemBench({ label, getIdle, progress }) {
-  if (running) throw new Error('이미 측정 중입니다.');
+  if (running || gameRunning) throw new Error('이미 측정 중입니다.');
   running = true;
   try {
     const m = {};
@@ -169,22 +170,40 @@ function pmCandidates() {
 }
 const pmFind = () => pmCandidates().find((p) => { try { return fs.statSync(p).size > 100000; } catch (_) { return false; } });
 
+// 이 앱은 관리자 권한으로 실행되므로, 내려받았거나 사용자 폴더에 있는 exe 를 그대로 실행하면
+// 바꿔치기된 파일이 관리자 권한을 얻을 수 있다. 실행·저장 전에 유효한 Intel 서명인지 확인한다.
+async function pmVerify(file) {
+  const r = await runPS(String.raw`
+$s = Get-AuthenticodeSignature -LiteralPath $A.f
+Emit @{ status = [string]$s.Status; subject = [string]$s.SignerCertificate.Subject }`, { f: file });
+  if (r.status !== 'Valid' || !/^CN=Intel Corporation,/.test(r.subject || '')) {
+    throw new Error(`PresentMon.exe 의 디지털 서명을 확인할 수 없습니다 (${r.status || '서명 없음'}). 안전을 위해 실행하지 않습니다: ${file}`);
+  }
+  return file;
+}
+
 async function pmEnsure(progress) {
   const found = pmFind();
-  if (found) return found;
+  if (found) return pmVerify(found);
   const dest = path.join(app.getPath('userData'), 'tools', 'PresentMon.exe');
   fs.mkdirSync(path.dirname(dest), { recursive: true });
   let lastErr;
   for (const v of PM_VERSIONS) {
+    const tmp = dest + '.download';
     try {
       progress && progress(5, `FPS 측정 도구(Intel PresentMon ${v}) 내려받는 중…`);
       const res = await net.fetch(`https://github.com/GameTechDev/PresentMon/releases/download/v${v}/PresentMon-${v}-x64.exe`);
       if (!res.ok) throw new Error('HTTP ' + res.status);
       const buf = Buffer.from(await res.arrayBuffer());
       if (buf.length < 100000) throw new Error('파일이 올바르지 않습니다');
-      fs.writeFileSync(dest, buf);
+      fs.writeFileSync(tmp, buf);
+      await pmVerify(tmp);
+      fs.renameSync(tmp, dest);
       return dest;
-    } catch (e) { lastErr = e; }
+    } catch (e) {
+      lastErr = e;
+      try { fs.unlinkSync(tmp); } catch (_) {}
+    }
   }
   throw new Error('PresentMon 다운로드 실패: ' + (lastErr?.message || '') + ' — 인터넷 연결을 확인하거나 PresentMon.exe 를 ' + path.dirname(dest) + ' 에 넣어 주세요.');
 }
@@ -201,63 +220,15 @@ Emit @{ list = $l }
   return Array.isArray(r.list) ? r.list : r.list ? [r.list] : [];
 }
 
-function parseCsv(file, pid) {
-  const text = fs.readFileSync(file, 'utf8');
-  const lines = text.split(/\r?\n/).filter(Boolean);
-  if (lines.length < 2) return null;
-  const head = lines[0].split(',');
-  const iFt = head.indexOf('MsBetweenPresents');
-  const iPid = head.indexOf('ProcessID');
-  const iSc = head.indexOf('SwapChainAddress');
-  const iApp = head.indexOf('Application');
-  if (iFt < 0) return null;
-  // 스왑체인별로 모은 뒤 프레임이 가장 많은 것을 사용
-  const chains = new Map();
-  let appName = '';
-  for (let k = 1; k < lines.length; k++) {
-    const c = lines[k].split(',');
-    if (iPid >= 0 && pid && Number(c[iPid]) !== Number(pid)) continue;
-    const ft = parseFloat(c[iFt]);
-    if (!(ft > 0) || ft > 5000) continue;
-    const key = iSc >= 0 ? c[iSc] : 'x';
-    if (!chains.has(key)) chains.set(key, []);
-    chains.get(key).push(ft);
-    if (!appName && iApp >= 0) appName = c[iApp];
-  }
-  let ft = [];
-  for (const v of chains.values()) if (v.length > ft.length) ft = v;
-  return ft.length ? { ft, appName } : null;
+let gameRunning = false;
+async function runGameBench(opts) {
+  // 다운로드 대기 중에도 중복 실행을 막도록 시작하자마자 표시
+  if (gameRunning || running) throw new Error('이미 측정 중입니다.');
+  gameRunning = true;
+  try { return await measureGame(opts); } finally { gameRunning = false; }
 }
 
-function frameStats(ft) {
-  const n = ft.length;
-  const total = ft.reduce((a, b) => a + b, 0);
-  const sorted = [...ft].sort((a, b) => b - a); // 느린 순
-  const worst = (p) => { const k = Math.max(1, Math.round(n * p)); return sorted.slice(0, k).reduce((a, b) => a + b, 0) / k; };
-  const asc = [...ft].sort((a, b) => a - b);
-  const median = asc[Math.floor(n / 2)];
-  // 그래프용 다운샘플 (구간별 최대값을 남겨 끊김이 보이게)
-  const B = 240, series = [];
-  for (let b = 0; b < Math.min(B, n); b++) {
-    const s = Math.floor((b * n) / Math.min(B, n)), e = Math.floor(((b + 1) * n) / Math.min(B, n));
-    let mx = 0; for (let i = s; i < e; i++) if (ft[i] > mx) mx = ft[i];
-    series.push(+mx.toFixed(2));
-  }
-  return {
-    frames: n,
-    avgFps: +((n / total) * 1000).toFixed(1),
-    low1: +(1000 / worst(0.01)).toFixed(1),
-    low01: +(1000 / worst(0.001)).toFixed(1),
-    ftAvg: +(total / n).toFixed(2),
-    ftP99: +asc[Math.min(n - 1, Math.floor(n * 0.99))].toFixed(2),
-    stutters: ft.filter((x) => x > median * 2.5).length,
-    series,
-  };
-}
-
-let gameRunning = null;
-async function runGameBench({ pid, name, seconds, delay, label, progress }) {
-  if (gameRunning) throw new Error('이미 측정 중입니다.');
+async function measureGame({ pid, name, seconds, delay, label, progress }) {
   const pm = await pmEnsure(progress);
   const csv = path.join(os.tmpdir(), `ofb_pm_${Date.now()}.csv`);
   const args = ['--process_id', String(pid), '--output_file', csv, '--timed', String(seconds), '--terminate_after_timed',
@@ -265,7 +236,6 @@ async function runGameBench({ pid, name, seconds, delay, label, progress }) {
   if (delay > 0) args.push('--delay', String(delay));
   await new Promise((resolve, reject) => {
     const p = spawn(pm, args, { windowsHide: true });
-    gameRunning = p;
     let err = '';
     p.stderr.on('data', (d) => { err += d; });
     p.stdout.on('data', (d) => { err += d; });
@@ -276,11 +246,11 @@ async function runGameBench({ pid, name, seconds, delay, label, progress }) {
       else progress(Math.min(99, Math.round((el / (delay + seconds)) * 100)), `${name} 측정 중… ${Math.max(0, Math.ceil(delay + seconds - el))}초 남음`);
     }, 500);
     const kill = setTimeout(() => { try { p.kill(); } catch (_) {} }, (seconds + delay + 40) * 1000);
-    p.on('error', (e) => { clearInterval(tick); clearTimeout(kill); gameRunning = null; reject(e); });
-    p.on('exit', () => { clearInterval(tick); clearTimeout(kill); gameRunning = null; fs.existsSync(csv) ? resolve() : reject(new Error('측정 데이터가 없습니다. 관리자 권한으로 실행했는지, 게임이 실행 중인지 확인하세요. ' + err.slice(0, 200))); });
+    p.on('error', (e) => { clearInterval(tick); clearTimeout(kill); reject(e); });
+    p.on('exit', () => { clearInterval(tick); clearTimeout(kill); fs.existsSync(csv) ? resolve() : reject(new Error('측정 데이터가 없습니다. 관리자 권한으로 실행했는지, 게임이 실행 중인지 확인하세요. ' + err.slice(0, 200))); });
   });
-  const parsed = parseCsv(csv, pid);
-  try { fs.unlinkSync(csv); } catch (_) {}
+  let parsed;
+  try { parsed = parseCsv(fs.readFileSync(csv, 'utf8'), pid); } finally { try { fs.unlinkSync(csv); } catch (_) {} }
   if (!parsed || parsed.ft.length < 30) throw new Error('프레임이 거의 기록되지 않았습니다. 게임이 화면에 표시된 상태(최소화 X)에서 측정하세요.');
   const st = frameStats(parsed.ft);
   const run = {
@@ -294,8 +264,8 @@ async function runGameBench({ pid, name, seconds, delay, label, progress }) {
   return run;
 }
 
-module.exports = { __parseCsv: parseCsv, __frameStats: frameStats,
+module.exports = {
   SYSTEM_METRICS, GAME_METRICS, loadRuns, saveRuns,
   runSystemBench, runGameBench, listGameProcs, pmFind,
-  isRunning: () => running || !!gameRunning,
+  isRunning: () => running || gameRunning,
 };

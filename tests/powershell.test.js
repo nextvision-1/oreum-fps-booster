@@ -25,6 +25,7 @@ test('모든 PowerShell 스크립트 문법 오류 없음', { skip: !WIN }, () =
   };
   rawBlocks('main.js').forEach((s, i) => { scripts['main#' + i] = s; });
   rawBlocks('monitor.js').forEach((s, i) => { scripts['monitor#' + i] = s; });
+  rawBlocks('bench.js').forEach((s, i) => { scripts['bench#' + i] = s; });
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ofb-parse-'));
   try {
     for (const [k, v] of Object.entries(scripts)) fs.writeFileSync(path.join(dir, k.replace(/#/g, '_') + '.ps1'), '﻿' + v, 'utf8');

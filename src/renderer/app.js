@@ -33,6 +33,12 @@ async function call(ch, ...args) {
   if (!r.ok) throw new Error(r.error);
   return r.data;
 }
+// 성능 측정 중에는 스피너를 멈춘다. 그래픽 테스트를 위해 프레임 제한을 풀어 두었기 때문에
+// 애니메이션이 초당 수천 번 다시 그려져 측정 중인 게임과 GPU 를 나눠 쓰게 된다.
+async function withBenchBusy(text, fn) {
+  document.body.classList.add('benching');
+  try { return await withBusy(text, fn); } finally { document.body.classList.remove('benching'); }
+}
 async function withBusy(text, fn) {
   busy(true, text);
   try { return await fn(); }
@@ -143,6 +149,7 @@ function paintStatus() {
     const s = STATUS[t.id] || { status: 'off' };
     for (const card of $$(`.item[data-id="${t.id}"]`)) {
       $('input', card).checked = s.status === 'on' || s.status === 'partial';
+      $('input', card).disabled = s.status === 'na';
       const b = $('.badge.st', card);
       b.className = 'badge st ' + (s.status === 'on' ? 'on' : s.status === 'partial' ? 'partial' : '');
       b.textContent = s.status === 'on' ? '적용됨' : s.status === 'partial' ? '일부 적용' : s.status === 'na' ? '해당 없음' : '미적용';
@@ -495,9 +502,9 @@ $('#btnCheck').addEventListener('click', () => withBusy('시스템을 검사하�
           if (r.fix.type === 'action') return runAction(r.fix.id);
           const t = META.tweaks.find((x) => x.id === r.fix.id);
           if (t) {
-            const fake = { checked: true };
-            await toggleTweak(t, true, fake);
-            if (fake.checked) { b.textContent = '적용됨'; b.disabled = true; }
+            await toggleTweak(t, true, { checked: true });
+            // 취소·실패 시에는 버튼을 그대로 둔다
+            if (STATUS[t.id]?.status === 'on') { b.textContent = '적용됨'; b.disabled = true; }
           }
         });
         row.appendChild(b);
@@ -521,16 +528,19 @@ async function loadStartup() {
       el.className = 'card item';
       el.innerHTML = `
         <div class="body">
-          <div class="title">${esc(it.name)} <span class="badge">${it.src === 'HKCU' ? '현재 사용자' : '모든 사용자'}</span></div>
+          <div class="title">${esc(it.name)} <span class="badge">${esc(it.label)}</span></div>
           <div class="cmd" title="${esc(it.cmd)}">${esc(it.cmd)}</div>
         </div>
         <label class="switch"><input type="checkbox" ${it.enabled ? 'checked' : ''} /><span class="slider"></span></label>`;
       $('input', el).addEventListener('change', async (e) => {
-        const en = e.target.checked;
-        await withBusy('변경 중…', async () => {
-          await call('startup:set', it, en);
+        const input = e.target;
+        const en = input.checked;
+        const ok = await withBusy('변경 중…', async () => {
+          await call('startup:set', { src: it.src, name: it.name }, en);
           toast(`${it.name}: 시작 시 실행 ${en ? '켜짐' : '꺼짐'}`);
+          return true;
         });
+        if (!ok) input.checked = !en; // 실패(권한 부족 등) 시 스위치를 원래대로
       });
       box.appendChild(el);
     }
@@ -582,6 +592,7 @@ let BMETA = null;
 let RUNS = [];
 let cmpKind = 'system';
 let cmpSel = { a: null, b: null };
+let warnedPair = null;
 const COL_A = '#8577ee', COL_B = '#17a878';
 
 api.on('bench:progress', (p) => {
@@ -589,7 +600,7 @@ api.on('bench:progress', (p) => {
 });
 
 async function runSystemBench(label, silent = false) {
-  return withBusy('시스템 벤치마크 준비 중…', async () => {
+  return withBenchBusy('시스템 벤치마크 준비 중…', async () => {
     const run = await call('bench:system', label);
     if (run.gpuError) log('그래픽 테스트 건너뜀: ' + run.gpuError);
     if (!silent) toast(`📊 측정 완료 (${run.label}) — 그래픽 ${fmtNum(run.metrics.gpuFps, 0)} FPS · CPU 멀티 ${fmtNum(run.metrics.cpuMulti, 0)}점`);
@@ -688,7 +699,10 @@ function renderCompare() {
   }).join('');
   $('#cmpTable').innerHTML = `<table class="cmpt"><thead><tr><th>항목</th><th class="num">기준</th><th class="num">비교</th><th>그래프</th><th class="num">변화</th></tr></thead><tbody>${rows}</tbody></table>`;
   $$('#cmpTable .bars div').forEach((el) => { el.style.width = el.dataset.w + '%'; });
-  if (cmpKind === 'game' && A.app !== B.app) toast('서로 다른 게임의 기록을 비교하고 있습니다.', true);
+  // 창 크기를 바꿀 때마다 다시 그리므로, 같은 조합에서는 경고를 한 번만 띄운다
+  const pairKey = A.id + '|' + B.id;
+  if (cmpKind === 'game' && A.app !== B.app && warnedPair !== pairKey) toast('서로 다른 게임의 기록을 비교하고 있습니다.', true);
+  warnedPair = pairKey;
 
   const showFt = cmpKind === 'game' && A.series && B.series;
   $('#ftWrap').classList.toggle('hidden', !showFt);
@@ -777,7 +791,7 @@ $('#btnBenchGame').addEventListener('click', async () => {
   if (!sel.value) { await loadProcs(); if (!sel.value) return toast('게임을 먼저 실행한 뒤 새로고침을 눌러 선택하세요.', true); }
   const opt = sel.selectedOptions[0];
   const params = { pid: Number(sel.value), name: opt.dataset.name, seconds: Number($('#bgSec').value), delay: Number($('#bgDelay').value), label: $('#bgLabel').value };
-  const run = await withBusy('FPS 측정 준비 중…', () => call('bench:game', params));
+  const run = await withBenchBusy('FPS 측정 준비 중…', () => call('bench:game', params));
   if (run) {
     toast(`🎮 ${run.app} — 평균 ${fmtNum(run.metrics.avgFps)} FPS · 1% Low ${fmtNum(run.metrics.low1)}`);
     BMETA.presentmon = true;
