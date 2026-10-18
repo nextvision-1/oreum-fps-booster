@@ -44,3 +44,14 @@ test('frameStats: 프레임 수가 적어도 오류 없이 계산', () => {
   assert.equal(s.series.length, 3);
   assert.equal(s.low1, +(1000 / 18).toFixed(1));
 });
+
+test('그래픽 테스트: 60 FPS 제한 회귀 방지 (desynchronized 캔버스 금지, 프레임 제한 해제는 테스트 프로세스에만)', () => {
+  const fs = require('fs');
+  const path = require('path');
+  const gpu = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'gpu-bench.js'), 'utf8');
+  assert.ok(!/desynchronized:\s*true/.test(gpu), 'desynchronized: true 는 60 FPS 로 묶는다');
+  const main = fs.readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
+  const unlock = main.indexOf("appendSwitch('disable-frame-rate-limit')");
+  assert.ok(unlock > main.indexOf('if (GPU_CHILD) {'), '프레임 제한 해제는 GPU_CHILD 블록 안에서만');
+  assert.ok(main.includes("appendSwitch('force_high_performance_gpu')"), '노트북에서 게임용 GPU 로 측정');
+});

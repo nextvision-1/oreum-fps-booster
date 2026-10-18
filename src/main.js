@@ -13,9 +13,16 @@ const monitor = require('./monitor');
 const bench = require('./bench');
 const updater = require('./updater');
 
-// 그래픽 테스트가 모니터 주사율(수직 동기화)에 묶이지 않도록 프레임 제한 해제
-app.commandLine.appendSwitch('disable-frame-rate-limit');
-app.commandLine.appendSwitch('disable-gpu-vsync');
+// 그래픽 테스트 전용 하위 프로세스 (bench.js 가 --gpu-bench 로 띄움).
+// 프레임 제한 해제·고성능 GPU 강제는 이 프로세스에만 건다. 앱 전체에 걸면 메인 화면이 무제한으로 다시 그려지고,
+// 노트북에서는 앱을 켜 두는 것만으로 외장 GPU 가 계속 깨어 있게 된다.
+const GPU_CHILD = process.argv.includes('--gpu-bench');
+if (GPU_CHILD) {
+  app.commandLine.appendSwitch('disable-frame-rate-limit');
+  app.commandLine.appendSwitch('disable-gpu-vsync');
+  app.commandLine.appendSwitch('force_high_performance_gpu'); // 노트북에서 내장 그래픽이 아닌 게임용 GPU 로 측정
+  app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'ofb-gpu-'))); // 본 프로세스와 프로필 충돌 방지
+}
 
 // 스모크 테스트 모드: 실제 데이터 폴더·설정 감시를 건드리지 않고 화면이 오류 없이 뜨는지만 확인
 const SMOKE = process.env.OFB_SMOKE === '1';
@@ -504,7 +511,9 @@ async function runSmoke() {
 }
 
 // 두 번 실행되면 감시·모니터가 중복되므로 기존 창을 앞으로 가져온다
-if (!SMOKE && !app.requestSingleInstanceLock()) {
+if (GPU_CHILD) {
+  app.whenReady().then(() => bench.runGpuChild());
+} else if (!SMOKE && !app.requestSingleInstanceLock()) {
   app.quit();
 } else {
   app.on('second-instance', () => {
@@ -529,7 +538,7 @@ if (!SMOKE && !app.requestSingleInstanceLock()) {
 }
 app.on('before-quit', () => monitor.stop());
 app.on('window-all-closed', () => {
-  if (SELFTEST) return; // 자가진단 중 벤치마크 창이 닫혀도 종료하지 않음
+  if (SELFTEST || GPU_CHILD) return; // 자가진단 중 벤치마크 창이 닫혀도 종료하지 않음 (그래픽 테스트 프로세스는 스스로 종료)
   monitor.stop();
   app.quit();
 });

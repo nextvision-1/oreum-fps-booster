@@ -145,7 +145,7 @@ async function finishRest(d, { say, section, fail, flush, outFile, t0, failures 
   try {
     const run = await d.bench.runSystemBench({ label: '자가진단', getIdle: () => ({ cpu: null }), progress: () => {} });
     const m = run.metrics;
-    say(`  그래픽 ${m.gpuFps ?? '-'} FPS (1% Low ${m.gpuLow1 ?? '-'}) · CPU 싱글 ${m.cpuSingle} / 멀티 ${m.cpuMulti} · 끊김 ${m.spikes}회 · 핑 ${m.ping ? Math.round(m.ping) : '-'}ms`);
+    say(`  그래픽 ${m.gpuFps ?? '-'} FPS (1% Low ${m.gpuLow1 ?? '-'}, ${run.env.gpu || 'GPU 확인 불가'}) · CPU 싱글 ${m.cpuSingle} / 멀티 ${m.cpuMulti} · 끊김 ${m.spikes}회 · 핑 ${m.ping ? Math.round(m.ping) : '-'}ms`);
     if (run.gpuError) fail('그래픽 테스트: ' + run.gpuError);
   } catch (e) { fail('벤치마크 실패: ' + e.message); }
 

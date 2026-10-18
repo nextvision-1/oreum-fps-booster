@@ -103,6 +103,45 @@ function gpuTest(seconds) {
   });
 }
 
+// 측정 방식이 바뀌면 올린다. 다른 버전끼리의 그래픽 수치는 비교하지 않는다.
+// 2: 60 FPS 제한 해제(desynchronized 끔) + 별도 프로세스에서 게임용 GPU 로 측정
+const GPU_BENCH_VER = 2;
+
+// 메인 프로세스 쪽: 앱 exe 를 --gpu-bench 로 한 번 더 띄워 결과 파일을 받아 온다
+function gpuTestIsolated(seconds) {
+  return new Promise((resolve) => {
+    const out = path.join(os.tmpdir(), `ofb_gpu_${Date.now()}.json`);
+    const args = [...(app.isPackaged ? [] : [app.getAppPath()]), '--gpu-bench', `--seconds=${seconds}`, `--out=${out}`];
+    let p;
+    try { p = spawn(process.execPath, args, { stdio: 'ignore' }); } catch (e) { return resolve({ error: '그래픽 테스트를 시작하지 못했습니다: ' + e.message }); }
+    const kill = setTimeout(() => { try { p.kill(); } catch (_) {} }, (seconds + 60) * 1000);
+    const done = () => {
+      clearTimeout(kill);
+      try { resolve(JSON.parse(fs.readFileSync(out, 'utf8'))); }
+      catch (_) { resolve({ error: '그래픽 테스트 결과가 없습니다 (중간에 종료됨)' }); }
+      try { fs.unlinkSync(out); } catch (_) {}
+    };
+    p.once('error', (e) => { clearTimeout(kill); resolve({ error: '그래픽 테스트를 시작하지 못했습니다: ' + e.message }); });
+    p.once('exit', done);
+  });
+}
+
+// 하위 프로세스 쪽 (main.js 가 --gpu-bench 일 때 호출): 측정하고 결과 파일을 쓴 뒤 종료
+async function runGpuChild() {
+  const arg = (k) => (process.argv.find((a) => a.startsWith(`--${k}=`)) || '').slice(k.length + 3);
+  const seconds = Math.min(120, Math.max(3, Number(arg('seconds')) || 15));
+  let r;
+  try {
+    r = await gpuTest(seconds);
+    const info = await app.getGPUInfo('complete').catch(() => null);
+    const gl = String(info?.auxAttributes?.glRenderer || '');
+    // 예: "ANGLE (NVIDIA, NVIDIA GeForce RTX 5060 Laptop GPU (0x00002D59) Direct3D11 ..." → GPU 이름만
+    r.gpu = (gl.match(/^ANGLE \([^,]+, (.+?) \(0x/) || [])[1] || gl.slice(0, 80);
+  } catch (e) { r = { error: e.message }; }
+  try { fs.writeFileSync(arg('out'), JSON.stringify(r)); } catch (_) {}
+  app.exit(0);
+}
+
 // ───────── 시스템 벤치마크 ─────────
 let running = false;
 async function runSystemBench({ label, getIdle, progress }) {
@@ -141,14 +180,14 @@ Emit @{ pings = $p; procs = @(Get-Process).Count }
     m.maxGap = +j.max.toFixed(3);
 
     progress(60, '그래픽 테스트 중… (약 20초, 화면을 건드리지 마세요)');
-    const g = await gpuTest(15);
+    const g = await gpuTestIsolated(15);
     if (!g.error) { m.gpuFps = g.avgFps; m.gpuLow1 = g.low1; m.ftStd = g.ftStd; }
 
     progress(100, '완료');
     const run = {
       id: Date.now().toString(36), kind: 'system', time: new Date().toISOString(), label: label || '측정',
       metrics: m, gpuError: g.error || null,
-      env: { cpu: os.cpus()[0]?.model?.trim(), threads: os.cpus().length, ramGB: Math.round(os.totalmem() / 1073741824) },
+      env: { cpu: os.cpus()[0]?.model?.trim(), threads: os.cpus().length, ramGB: Math.round(os.totalmem() / 1073741824), gpu: g.gpu || null, benchVer: GPU_BENCH_VER },
     };
     const runs = loadRuns();
     runs.unshift(run);
@@ -267,5 +306,6 @@ async function measureGame({ pid, name, seconds, delay, label, progress }) {
 module.exports = {
   SYSTEM_METRICS, GAME_METRICS, loadRuns, saveRuns,
   runSystemBench, runGameBench, listGameProcs, pmFind, pmVerify,
+  runGpuChild, GPU_BENCH_VER,
   isRunning: () => running || gameRunning,
 };

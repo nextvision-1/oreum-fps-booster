@@ -632,7 +632,7 @@ function renderRuns() {
     const m = r.metrics;
     const sum = r.kind === 'game'
       ? `평균 ${fmtNum(m.avgFps)} FPS · 1% Low ${fmtNum(m.low1)} · ${r.seconds}초 · ${Number(r.frames).toLocaleString()}프레임`
-      : `그래픽 ${fmtNum(m.gpuFps, 0)} FPS · 1% Low ${fmtNum(m.gpuLow1, 0)} · CPU ${fmtNum(m.cpuSingle, 0)}/${fmtNum(m.cpuMulti, 0)}점 · 끊김 ${fmtNum(m.spikes, 0)}회`;
+      : `그래픽 ${fmtNum(m.gpuFps, 0)} FPS · 1% Low ${fmtNum(m.gpuLow1, 0)} · CPU ${fmtNum(m.cpuSingle, 0)}/${fmtNum(m.cpuMulti, 0)}점 · 끊김 ${fmtNum(m.spikes, 0)}회${r.env?.gpu ? ' · ' + r.env.gpu : ''}${(r.env?.benchVer || 1) < 2 ? ' · 이전 측정 방식(60 FPS 제한)' : ''}`;
     el.innerHTML = `<div class="body"><div class="title">${r.kind === 'game' ? '🎮' : '🖥'} ${esc(runName(r))}</div><div class="desc">${esc(sum)}</div></div><button class="btn small ghost">삭제</button>`;
     $('button', el).addEventListener('click', async () => {
       if (!(await call('confirm', `"${runName(r)}" 측정 기록을 삭제할까요?`))) return;
@@ -702,6 +702,8 @@ function renderCompare() {
   // 창 크기를 바꿀 때마다 다시 그리므로, 같은 조합에서는 경고를 한 번만 띄운다
   const pairKey = A.id + '|' + B.id;
   if (cmpKind === 'game' && A.app !== B.app && warnedPair !== pairKey) toast('서로 다른 게임의 기록을 비교하고 있습니다.', true);
+  // 그래픽 테스트 측정 방식이 바뀐 기록끼리는 그래픽 수치를 비교할 수 없다 (이전 방식은 60 FPS 로 제한됨)
+  if (cmpKind === 'system' && (A.env?.benchVer || 1) !== (B.env?.benchVer || 1) && warnedPair !== pairKey) toast('그래픽 테스트 측정 방식이 바뀐 이전 기록과 비교하고 있습니다. 그래픽 FPS 는 비교할 수 없으니 새로 두 번 측정하세요.', true);
   warnedPair = pairKey;
 
   const showFt = cmpKind === 'game' && A.series && B.series;

@@ -7,7 +7,8 @@
   const DRAWS = 1500;
   const hud = document.getElementById('hud');
   const canvas = document.getElementById('c');
-  const gl = canvas.getContext('webgl2', { antialias: false, powerPreference: 'high-performance', desynchronized: true });
+  // desynchronized(저지연 캔버스)는 쓰지 않는다: 켜면 60 FPS 로 묶여 빠른 GPU 끼리 차이가 사라진다
+  const gl = canvas.getContext('webgl2', { antialias: false, powerPreference: 'high-performance' });
   const report = (r) => { try { bench.done(r); } catch (_) {} };
   if (!gl) { report({ error: 'WebGL2를 사용할 수 없습니다 (그래픽 드라이버 확인)' }); return; }
 
