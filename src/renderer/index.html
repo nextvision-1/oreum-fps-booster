@@ -12,7 +12,7 @@
       <div class="logo">O</div>
       <div>
         <div class="brand-name">Oreum FPS Booster</div>
-        <div class="brand-ver" id="ver">v2.0.0</div>
+        <div class="brand-ver"><span id="ver">v2.1.0</span> · <button class="linkbtn" id="btnUpdCheck">업데이트 확인</button></div>
       </div>
     </div>
     <nav id="nav">
@@ -37,6 +37,10 @@
     <div id="adminBar" class="banner warn hidden">
       <span>⚠ 관리자 권한이 아닙니다. 대부분의 최적화는 관리자 권한이 필요합니다.</span>
       <button id="btnAdmin" class="btn small">관리자로 다시 실행</button>
+    </div>
+    <div id="updateBar" class="banner info hidden">
+      <span id="updText"></span>
+      <button id="btnUpd" class="btn small primary"></button>
     </div>
     <div id="rebootBar" class="banner info hidden">
       <span>일부 설정은 재부팅(또는 로그아웃) 후 완전히 적용됩니다.</span>
@@ -250,6 +254,13 @@
           <div class="desc">Windows 업데이트 등으로 적용한 최적화가 원래대로 돌아가면, 프로그램이 켜져 있는 동안 10분마다 확인해 자동으로 다시 적용합니다.</div>
         </div>
         <label class="switch"><input type="checkbox" id="chkGuard" /><span class="slider"></span></label>
+      </div>
+      <div class="card item">
+        <div class="body">
+          <div class="title">자동 업데이트 확인</div>
+          <div class="desc">프로그램을 켤 때와 6시간마다 새 버전이 있는지 확인해 알려 줍니다. 설치는 직접 눌렀을 때만 진행합니다.</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="chkAutoUpd" /><span class="slider"></span></label>
       </div>
       <p class="muted">최적화를 적용할 때마다 변경 전 값이 자동 저장됩니다. 항목별 또는 전체를 Windows 원래 값으로 되돌릴 수 있습니다.</p>
       <div class="row">

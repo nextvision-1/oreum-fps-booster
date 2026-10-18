@@ -14,6 +14,20 @@ Windows 게임 FPS·입력 지연 최적화 프로그램 (Electron). 모든 변�
 
 빌드된 exe 는 실행 시 자동으로 관리자 권한을 요청합니다.
 
+## 새 버전 배포 (자동 업데이트)
+앱은 GitHub Releases(`package.json` 의 `build.publish`: `nextvision-1/oreum-fps-booster`)에서 새 버전을 확인합니다.
+1. `package.json` 의 `version` 을 올립니다 (예: 2.1.0 → 2.2.0)
+2. GitHub 개인 액세스 토큰(repo 권한)을 환경 변수로 지정하고 배포
+   ```
+   set GH_TOKEN=ghp_...
+   npm run release
+   ```
+   → exe 와 `latest.yml` 이 GitHub Release(초안 아님)로 올라갑니다.
+3. 설치형 사용자는 앱에서 "새 버전" 알림 → **업데이트** → **다시 시작해 설치**. 포터블 사용자는 다운로드 페이지가 열립니다.
+
+- 앱은 시작 15초 뒤와 6시간마다 확인합니다 (백업·복원 메뉴에서 끌 수 있음). 내려받기·설치는 사용자가 눌렀을 때만 합니다.
+- 내려받은 파일은 `latest.yml` 의 SHA-512 로 검증합니다. 코드 서명 인증서를 적용하면 `build.win.publisherName` 을 지정해 서명까지 검증하는 것을 권장합니다.
+
 ## 기능
 | 메뉴 | 내용 |
 |---|---|
@@ -27,6 +41,7 @@ Windows 게임 FPS·입력 지연 최적화 프로그램 (Electron). 모든 변�
 | Windows 개인화 (9개) | 확장명·숨김파일 표시, 갤러리 숨기기, 내 PC로 열기, 클래식 우클릭, 작업표시줄 정렬/버튼, 다크 모드 |
 | 백업·복원 | 변경 전 값 자동 저장, 항목별/전체 기본값 복원, 시스템 복원 지점, **설정 유지 감시**(업데이트로 되돌아간 설정 자동 재적용. 재적용해도 안 되는 항목은 반복하지 않음, 성능 측정 중에는 쉼) |
 | 작업 기록 | 모든 작업 이력 저장 |
+| 자동 업데이트 | GitHub Releases 에서 새 버전 확인·알림, 설치형은 내려받아 다시 시작해 설치, 포터블은 다운로드 페이지 안내 |
 
 - 게임 파일·메모리는 건드리지 않고 Windows 설정만 바꿉니다.
 - 데이터 위치: `%APPDATA%\oreum-fps-booster\` (backup.json, history.json, settings.json, bench.json, backups\)
@@ -53,6 +68,7 @@ src/startup.js   시작 프로그램 위치·조회/변경 스크립트
 src/monitor.js   실시간 성능 모니터
 src/bench.js     전/후 비교 벤치마크·PresentMon 게임 FPS
 src/bench-stats.js  PresentMon CSV 해석·프레임 통계 (테스트 대상)
+src/updater.js   자동 업데이트 (electron-updater, GitHub Releases)
 src/renderer/gpu-bench.js  그래픽 테스트(WebGL2 고정 장면)
 tools/           PresentMon.exe (빌드.bat 이 자동 다운로드)
 src/preload.js   렌더러 ↔ 메인 안전 브리지

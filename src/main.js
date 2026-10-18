@@ -11,6 +11,7 @@ const { BLOAT, BLOAT_LIST, BLOAT_REMOVE } = require('./bloat');
 const { STARTUP_SRCS, STARTUP_LIST_SCRIPT, STARTUP_SET_SCRIPT } = require('./startup');
 const monitor = require('./monitor');
 const bench = require('./bench');
+const updater = require('./updater');
 
 // 그래픽 테스트가 모니터 주사율(수직 동기화)에 묶이지 않도록 프레임 제한 해제
 app.commandLine.appendSwitch('disable-frame-rate-limit');
@@ -48,7 +49,7 @@ function saveState(state, label) {
     writeJSON(path.join(SNAP_DIR(), `${stamp}_${label}.json`), state);
   }
 }
-const loadSettings = () => ({ guard: true, ...readJSON(SETTINGS_FILE(), {}) });
+const loadSettings = () => ({ guard: true, autoUpdate: true, ...readJSON(SETTINGS_FILE(), {}) });
 
 function addHistory(type, text) {
   const h = readJSON(HISTORY_FILE(), []);
@@ -360,11 +361,24 @@ handle('settings:get', () => loadSettings());
 handle('settings:set', (patch) => {
   const s = loadSettings();
   if (patch && typeof patch.guard === 'boolean') s.guard = patch.guard;
+  if (patch && typeof patch.autoUpdate === 'boolean') s.autoUpdate = patch.autoUpdate;
   writeJSON(SETTINGS_FILE(), s);
   return s;
 });
 handle('guard:run', () => runGuard());
 handle('admin:relaunch', () => exclusive(() => relaunchAsAdmin()));
+
+// ───────── 자동 업데이트 ─────────
+handle('update:state', () => updater.getState());
+handle('update:check', () => updater.check());
+handle('update:download', () => updater.download());
+// 설정 적용·복원이 끝난 뒤에만 설치를 위해 종료한다 (백업 저장 전 종료 방지)
+handle('update:install', () => exclusive(async () => {
+  if (bench.isRunning()) throw new Error('성능 측정이 끝난 뒤에 설치해 주세요.');
+  relaunching = true;
+  if (!updater.install()) { relaunching = false; throw new Error('설치할 업데이트가 없습니다.'); }
+  return true;
+}));
 handle('confirm', async (msg) => {
   const r = await dialog.showMessageBox(win, { type: 'question', buttons: ['확인', '취소'], defaultId: 0, cancelId: 1, title: 'Oreum FPS Booster', message: msg });
   return r.response === 0;
@@ -435,7 +449,12 @@ function createWindow() {
       if (monBuf.length > 10) monBuf.shift();
       send('monitor', m);
     });
+    updater.init((st) => send('update', st));
     if (SMOKE) return runSmoke();
+    // 시작 15초 뒤 한 번, 이후 6시간마다 새 버전 확인 (설정에서 끌 수 있음)
+    const autoCheck = () => { if (loadSettings().autoUpdate) updater.check().catch(() => {}); };
+    setTimeout(autoCheck, 15 * 1000);
+    setInterval(autoCheck, 6 * 60 * 60 * 1000);
     // 시작 30초 뒤 한 번, 이후 10분마다 설정 유지 감시
     setTimeout(() => runGuard().catch(() => {}), 30 * 1000);
     setInterval(() => runGuard().catch(() => {}), 10 * 60 * 1000);

@@ -9,7 +9,8 @@
     "start": "electron .",
     "test": "node --test \"tests/*.test.js\"",
     "smoke": "set OFB_SMOKE=1&& electron .",
-    "build": "electron-builder --win --x64"
+    "build": "electron-builder --win --x64",
+    "release": "electron-builder --win --x64 --publish always"
   },
   "devDependencies": {
     "electron": "^33.2.1",
@@ -48,6 +49,17 @@
           "PresentMon.exe"
         ]
       }
+    ],
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "nextvision-1",
+        "repo": "oreum-fps-booster",
+        "releaseType": "release"
+      }
     ]
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
   }
 }

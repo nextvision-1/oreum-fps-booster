@@ -807,6 +807,7 @@ async function loadBackup() {
   try {
     const s = await call('settings:get');
     $('#chkGuard').checked = !!s.guard;
+    $('#chkAutoUpd').checked = s.autoUpdate !== false;
     const list = await call('backup:info');
     box.innerHTML = list.length ? '' : '<div class="empty">아직 백업된 변경 사항이 없습니다.</div>';
     for (const b of list) {
@@ -844,6 +845,47 @@ $('#chkGuard').addEventListener('change', async (e) => {
 });
 $('#btnOpenBackup').addEventListener('click', () => call('backup:open'));
 
+// ───────── 자동 업데이트 ─────────
+let UPD = null;
+let updManual = false; // 사용자가 직접 확인을 눌렀을 때만 "최신 버전입니다"·오류를 알린다
+function paintUpdate(st) {
+  if (!st) return;
+  UPD = st;
+  const chk = $('#btnUpdCheck');
+  chk.disabled = st.status === 'checking' || st.status === 'downloading';
+  chk.textContent = st.status === 'checking' ? '확인 중…' : '업데이트 확인';
+  let text = '', label = '';
+  if (st.status === 'available') { text = `새 버전 v${st.version}이(가) 나왔습니다. (현재 v${st.current})`; label = st.portable ? '다운로드 페이지 열기' : '업데이트'; }
+  else if (st.status === 'downloading') text = `새 버전 v${st.version} 내려받는 중… ${st.percent ?? 0}%`;
+  else if (st.status === 'ready') { text = `v${st.version} 업데이트 준비 완료 — 다시 시작하면 설치됩니다.`; label = '다시 시작해 설치'; }
+  $('#updateBar').classList.toggle('hidden', !text);
+  $('#updText').textContent = text;
+  $('#btnUpd').textContent = label;
+  $('#btnUpd').classList.toggle('hidden', !label);
+  if (updManual && !['checking', 'idle'].includes(st.status)) {
+    updManual = false;
+    if (st.status === 'none') toast(`최신 버전입니다. (v${st.current})`);
+    else if (st.status === 'error' || st.status === 'unsupported') toast(st.error || '업데이트를 확인하지 못했습니다.', true);
+  }
+}
+api.on('update', paintUpdate);
+$('#btnUpdCheck').addEventListener('click', async () => {
+  updManual = true;
+  try { paintUpdate(await call('update:check')); } catch (e) { updManual = false; toast(e.message, true); }
+});
+$('#btnUpd').addEventListener('click', async () => {
+  if (UPD?.status === 'available') {
+    call('update:download').catch((e) => toast(e.message, true));
+  } else if (UPD?.status === 'ready') {
+    if (!(await call('confirm', `프로그램을 종료하고 v${UPD.version}을(를) 설치합니다.\n설치가 끝나면 자동으로 다시 실행됩니다.`))) return;
+    call('update:install').catch((e) => toast(e.message, true));
+  }
+});
+$('#chkAutoUpd').addEventListener('change', async (e) => {
+  const s = await call('settings:set', { autoUpdate: e.target.checked });
+  toast(s.autoUpdate ? '자동 업데이트 확인을 켰습니다.' : '자동 업데이트 확인을 껐습니다. (사이드바에서 직접 확인할 수 있습니다)');
+});
+
 // ───────── 기타 ─────────
 $('#btnAdmin').addEventListener('click', () => call('admin:relaunch').catch((e) => toast(e.message, true)));
 $('#btnReboot').addEventListener('click', async () => {
@@ -866,6 +908,7 @@ $('#btnReboot').addEventListener('click', async () => {
   log('프로그램 시작');
   loadHistory();
   call('settings:get').then((s) => paintGuard(s.guard)).catch(() => {});
+  call('update:state').then(paintUpdate).catch(() => {});
   call('sysinfo')
     .then((s) => {
       $('#sCpu').textContent = `${s.cpu} (${s.cores})`;

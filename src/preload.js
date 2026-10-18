@@ -5,9 +5,10 @@ const CHANNELS = [
   'clean:scan', 'clean:run', 'drives', 'check:run', 'bloat:list', 'bloat:remove',
   'startup:list', 'startup:set', 'backup:info', 'backup:open', 'history',
   'settings:get', 'settings:set', 'guard:run', 'admin:relaunch', 'confirm', 'reboot',
+  'update:state', 'update:check', 'update:download', 'update:install',
   'bench:meta', 'bench:list', 'bench:delete', 'bench:system', 'bench:procs', 'bench:game',
 ];
-const EVENTS = ['monitor', 'history', 'guard', 'bench:progress'];
+const EVENTS = ['monitor', 'history', 'guard', 'bench:progress', 'update'];
 
 contextBridge.exposeInMainWorld('api', {
   call: (ch, ...args) => {
