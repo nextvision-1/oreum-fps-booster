@@ -49,6 +49,86 @@ try {
   else { Add '시스템' '가상 메모리' 'warn' '수동 설정됨' '페이지 파일이 수동으로 잡혀 있습니다. 너무 작으면 게임이 튕길 수 있어 "자동 관리"를 권장합니다.' $null }
 } catch {}
 
+try {
+  if ([string]$os.OSArchitecture -notmatch '64') { Add '시스템' 'Windows 비트' 'bad' $os.OSArchitecture '32비트 Windows 는 메모리를 4GB까지만 씁니다. 64비트로 다시 설치하는 것을 권장합니다.' $null }
+  else { Add '시스템' 'Windows 비트' 'ok' $os.OSArchitecture '' $null }
+} catch {}
+
+try {
+  # 55c92734-... = Windows 제품의 ApplicationID
+  $lic = @(Get-CimInstance SoftwareLicensingProduct -Filter "PartialProductKey IS NOT NULL AND ApplicationID='55c92734-d682-4d71-983e-d6ec3f16059f'" -ErrorAction Stop)
+  if (@($lic | Where-Object { $_.LicenseStatus -eq 1 }).Count -gt 0) { Add '시스템' 'Windows 정품 인증' 'ok' '인증됨' '' $null }
+  else { Add '시스템' 'Windows 정품 인증' 'warn' '인증 안 됨' '정품 인증이 안 되면 개인 설정이 제한되고 일부 업데이트를 받지 못할 수 있습니다.' $null }
+} catch { Add '시스템' 'Windows 정품 인증' 'info' '확인 불가' '' $null }
+
+try {
+  $wu = SG 'wuauserv'
+  if ($wu.exists -and [int]$wu.start -eq 4) { Add '시스템' 'Windows 업데이트 서비스' 'warn' '사용 안 함' '업데이트 서비스가 꺼져 있으면 보안 패치와 게임용 드라이버·DirectX 업데이트를 받지 못합니다.' $null }
+  else { Add '시스템' 'Windows 업데이트 서비스' 'ok' '사용' '' $null }
+} catch {}
+
+try {
+  $bios = Get-CimInstance Win32_BIOS
+  if ($bios.ReleaseDate) {
+    $txt = ([string]$bios.SMBIOSBIOSVersion + ' (' + $bios.ReleaseDate.ToString('yyyy-MM-dd') + ')')
+    if (((Get-Date) - $bios.ReleaseDate).TotalDays -gt 1095) { Add '시스템' 'BIOS 버전' 'info' $txt '3년 넘은 BIOS 입니다. 메인보드·노트북 제조사 사이트에서 안정성·CPU 호환성 업데이트가 있는지 확인해 보세요.' $null }
+    else { Add '시스템' 'BIOS 버전' 'ok' $txt '' $null }
+  }
+} catch {}
+
+try {
+  $hb = RG 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Session Manager\Power' 'HiberbootEnabled'
+  if ($hb.exists -and [int]$hb.value -eq 1) { Add '시스템' '빠른 시작' 'info' '켜짐' '빠른 시작이 켜져 있으면 "시스템 종료" 뒤에도 커널이 새로 시작되지 않아 드라이버 문제가 남을 수 있습니다. 문제가 생기면 "다시 시작"을 쓰세요.' $null }
+  else { Add '시스템' '빠른 시작' 'ok' '꺼짐' '' $null }
+} catch {}
+
+# ───── 안정성 (최근 이벤트 로그) ─────
+function EvList($log, $provider, $ids, $days) {
+  $f = @{ LogName = $log; StartTime = (Get-Date).AddDays(-1 * $days) }
+  if ($provider) { $f.ProviderName = $provider }
+  if ($ids) { $f.Id = $ids }
+  # 일치하는 이벤트가 없으면 오류를 내므로 조용히 빈 목록으로
+  return @(Get-WinEvent -FilterHashtable $f -MaxEvents 500 -ErrorAction SilentlyContinue)
+}
+
+try {
+  $n = (EvList 'System' 'Microsoft-Windows-WER-SystemErrorReporting' @(1001) 30).Count
+  if ($n -gt 0) { Add '안정성' '블루스크린 (최근 30일)' 'bad' ($n.ToString() + '회') '블루스크린이 발생했습니다. 그래픽·칩셋 드라이버 업데이트, 오버클럭·XMP 해제 후 재현되는지 확인하세요.' $null }
+  else { Add '안정성' '블루스크린 (최근 30일)' 'ok' '없음' '' $null }
+} catch {}
+
+try {
+  $n = (EvList 'System' 'Microsoft-Windows-Kernel-Power' @(41) 30).Count
+  if ($n -gt 0) { Add '안정성' '비정상 종료 (최근 30일)' 'warn' ($n.ToString() + '회') '전원이 갑자기 꺼지거나 멈춰서 강제로 끈 기록입니다. 게임 중 꺼진다면 파워 용량·온도·오버클럭을 확인하세요.' $null }
+  else { Add '안정성' '비정상 종료 (최근 30일)' 'ok' '없음' '' $null }
+} catch {}
+
+try {
+  $n = (EvList 'System' 'Display' @(4101) 30).Count
+  if ($n -gt 0) { Add '안정성' '그래픽 드라이버 멈춤 (최근 30일)' 'warn' ($n.ToString() + '회') '그래픽 드라이버가 응답을 멈췄다가 복구된 기록입니다(화면 깜빡임·게임 튕김). 드라이버 재설치나 GPU 오버클럭 해제를 권장합니다.' $null }
+  else { Add '안정성' '그래픽 드라이버 멈춤 (최근 30일)' 'ok' '없음' '' $null }
+} catch {}
+
+try {
+  $n = (EvList 'System' 'Microsoft-Windows-WHEA-Logger' $null 30).Count
+  if ($n -gt 0) { Add '안정성' '하드웨어 오류 (WHEA, 최근 30일)' 'warn' ($n.ToString() + '회') 'CPU·메모리·PCIe 장치가 보고한 하드웨어 오류입니다. 오버클럭·언더볼트·XMP 설정이 불안정할 때 자주 나타납니다.' $null }
+  else { Add '안정성' '하드웨어 오류 (WHEA, 최근 30일)' 'ok' '없음' '' $null }
+} catch {}
+
+try {
+  $n = (EvList 'System' 'disk' @(7, 11, 51, 153) 30).Count
+  if ($n -gt 0) { Add '안정성' '디스크 입출력 오류 (최근 30일)' 'bad' ($n.ToString() + '회') '디스크 읽기·쓰기 오류가 기록됐습니다. 디스크 고장 전조일 수 있으니 중요한 파일을 백업하고 케이블·디스크 상태를 확인하세요.' $null }
+  else { Add '안정성' '디스크 입출력 오류 (최근 30일)' 'ok' '없음' '' $null }
+} catch {}
+
+try {
+  $ev = EvList 'Application' 'Application Error' @(1000) 7
+  if ($ev.Count -ge 5) {
+    $apps = @($ev | ForEach-Object { [string]$_.Properties[0].Value } | Group-Object | Sort-Object Count -Descending | Select-Object -First 3 | ForEach-Object { $_.Name + ' ' + $_.Count + '회' }) -join ', '
+    Add '안정성' '프로그램 충돌 (최근 7일)' 'warn' ($ev.Count.ToString() + '회 · ' + $apps) '같은 프로그램이 반복해서 튕긴다면 재설치하거나, 게임이라면 파일 무결성 검사를 실행하세요.' $null
+  } else { Add '안정성' '프로그램 충돌 (최근 7일)' 'ok' ($ev.Count.ToString() + '회') '' $null }
+} catch {}
+
 # ───── 메모리·디스크 ─────
 try {
   $tot = [double]$os.TotalVisibleMemorySize / 1MB
@@ -172,17 +252,24 @@ try {
   foreach ($a in $ad) {
     $wifi = ($a.InterfaceDescription -match 'Wi-?Fi|Wireless|802\.11|무선') -or ($a.NdisPhysicalMedium -eq 9)
     if ($wifi) { Add '네트워크·시작' ('네트워크 연결: ' + $a.Name) 'info' ('무선 · ' + $a.LinkSpeed) '무선은 핑이 튀기 쉽습니다. 가능하면 유선 랜을 권장합니다.' $null }
+    elseif ([int64]$a.Speed -gt 0 -and [int64]$a.Speed -lt 1000000000) { Add '네트워크·시작' ('네트워크 연결: ' + $a.Name) 'warn' ('유선 · ' + $a.LinkSpeed) '유선인데 1Gbps 미만으로 연결됐습니다. 랜선(CAT5e 이상)이나 공유기 포트·케이블 접촉을 확인하세요.' $null }
     else { Add '네트워크·시작' ('네트워크 연결: ' + $a.Name) 'ok' ('유선 · ' + $a.LinkSpeed) '' $null }
   }
 } catch {}
 
 try {
-  $pings = @(Test-Connection -ComputerName 8.8.8.8 -Count 4 -ErrorAction Stop | ForEach-Object { $_.ResponseTime })
+  # 하나라도 손실되면 예외가 나지 않도록 SilentlyContinue 로 받고, 받은 응답 수로 손실률을 계산
+  $n = 10
+  $pings = @(Test-Connection -ComputerName 8.8.8.8 -Count $n -ErrorAction SilentlyContinue | ForEach-Object { [int]$_.ResponseTime })
+  if (-not $pings.Count) { throw '응답 없음' }
   $avg = [int](($pings | Measure-Object -Average).Average)
   $jit = [int](($pings | Measure-Object -Maximum).Maximum - ($pings | Measure-Object -Minimum).Minimum)
   $txt = ('평균 {0}ms · 흔들림 {1}ms' -f $avg, $jit)
   if ($avg -gt 80 -or $jit -gt 30) { Add '네트워크·시작' '인터넷 응답 속도' 'warn' $txt '핑이 높거나 불안정합니다. 다운로드 중인 프로그램을 확인하고 유선 연결을 권장합니다.' $null }
   else { Add '네트워크·시작' '인터넷 응답 속도' 'ok' $txt '' $null }
+  $loss = [int](($n - $pings.Count) * 100 / $n)
+  if ($loss -ge 10) { Add '네트워크·시작' '패킷 손실' 'warn' ($loss.ToString() + '%') '패킷이 손실되면 게임에서 순간이동·버벅임이 생깁니다. 공유기 재시작, 유선 연결, 다른 기기의 다운로드를 확인하세요.' $null }
+  else { Add '네트워크·시작' '패킷 손실' 'ok' ($loss.ToString() + '%') '' $null }
 } catch { Add '네트워크·시작' '인터넷 응답 속도' 'warn' '응답 없음' '인터넷 연결을 확인하세요.' (Fx 'action' 'flushDns') }
 
 try {
@@ -193,6 +280,186 @@ try {
   if ($n -gt 10) { Add '네트워크·시작' '시작 프로그램' 'warn' ($n.ToString() + '개') '부팅 시 자동 실행되는 프로그램이 많습니다. 필요 없는 것을 끄세요.' (Fx 'page' 'startup') }
   else { Add '네트워크·시작' '시작 프로그램' 'ok' ($n.ToString() + '개') '' $null }
 } catch {}
+
+# ───── 추가 검사: 메모리·디스크 ─────
+$laptop = $false
+try { $laptop = @(Get-CimInstance Win32_Battery -ErrorAction Stop).Count -gt 0 } catch {}
+
+try {
+  $mods = @(Get-CimInstance Win32_PhysicalMemory)
+  if ($mods.Count -eq 1) {
+    $txt = ('1개 장착 (' + [math]::Round([double]$mods[0].Capacity / 1GB) + 'GB)')
+    # 노트북 온보드 램은 1개로 보여도 듀얼 채널일 수 있어 참고로만
+    if ($laptop) { Add '메모리·디스크' 'RAM 구성' 'info' $txt '노트북 온보드 램이 아니라면, 같은 용량 램 2개(듀얼 채널) 구성이 게임에 유리합니다.' $null }
+    else { Add '메모리·디스크' 'RAM 구성' 'warn' $txt '램이 1개뿐이면 싱글 채널로 동작해 게임 FPS가 크게 떨어질 수 있습니다. 같은 용량 2개(듀얼 채널) 구성을 권장합니다.' $null }
+  } elseif ($mods.Count -gt 1) { Add '메모리·디스크' 'RAM 구성' 'ok' ($mods.Count.ToString() + '개 장착') '' $null }
+  $spd = [int](($mods | Measure-Object Speed -Maximum).Maximum)
+  $cfg = [int](($mods | Measure-Object ConfiguredClockSpeed -Minimum).Minimum)
+  if ($spd -gt 0 -and $cfg -gt 0) {
+    if ($cfg -lt $spd) { Add '메모리·디스크' 'RAM 속도' 'warn' ($cfg.ToString() + ' MT/s (지원 ' + $spd + ')') '램이 지원 속도보다 느리게 동작 중입니다. BIOS 에서 XMP/EXPO 를 켜면 FPS 가 오를 수 있습니다.' $null }
+    else { Add '메모리·디스크' 'RAM 속도' 'ok' ($cfg.ToString() + ' MT/s') '' $null }
+  }
+} catch {}
+
+try {
+  foreach ($ld in @(Get-CimInstance Win32_LogicalDisk -Filter 'DriveType=3' | Where-Object { $_.DeviceID -ne $env:SystemDrive -and $_.Size -gt 0 })) {
+    $pct = [double]$ld.FreeSpace / [double]$ld.Size
+    $txt = ('{0:N1} GB 남음 ({1:P0})' -f ($ld.FreeSpace / 1GB), $pct)
+    if ($pct -lt 0.10) { Add '메모리·디스크' ('여유 공간 (' + $ld.DeviceID + ')') 'warn' $txt '게임이 설치된 드라이브라면 업데이트·셰이더 캐시를 위해 10% 이상 비워 두세요.' $null }
+    else { Add '메모리·디스크' ('여유 공간 (' + $ld.DeviceID + ')') 'ok' $txt '' $null }
+  }
+} catch {}
+
+try {
+  $ErrorActionPreference = 'Continue'
+  $t = (& fsutil.exe behavior query DisableDeleteNotify 2>&1 | ForEach-Object { [string]$_ }) -join ' '
+  $ErrorActionPreference = 'Stop'
+  if ($t -match 'NTFS[^=]*=\s*(\d)') {
+    if ($matches[1] -eq '0') { Add '메모리·디스크' 'SSD TRIM' 'ok' '켜짐' '' $null }
+    else { Add '메모리·디스크' 'SSD TRIM' 'warn' '꺼짐' 'TRIM 이 꺼져 있으면 SSD 가 점점 느려집니다. 관리자 명령 프롬프트에서 fsutil behavior set DisableDeleteNotify 0 을 실행하세요.' $null }
+  }
+} catch { $ErrorActionPreference = 'Stop' }
+
+try {
+  $hf = Get-Item -LiteralPath ($env:SystemDrive + '\hiberfil.sys') -Force -ErrorAction Stop
+  $gb = [double]$hf.Length / 1GB
+  if (-not $laptop -and $gb -gt 2) { Add '메모리·디스크' '최대 절전 파일' 'info' ('{0:N1} GB' -f $gb) '데스크톱에서 최대 절전을 쓰지 않는다면 관리자 명령 프롬프트에서 powercfg /h off 로 이 용량을 확보할 수 있습니다. (빠른 시작도 함께 꺼집니다)' $null }
+  else { Add '메모리·디스크' '최대 절전 파일' 'ok' ('{0:N1} GB' -f $gb) '' $null }
+} catch {}
+
+# ───── 추가 검사: 그래픽·게임 ─────
+try {
+  $vram = [int64]0; $vname = ''
+  $cls = 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Class\{4d36e968-e325-11ce-bfc1-08002be10318}'
+  foreach ($k in @(Get-ChildItem -LiteralPath $cls -ErrorAction SilentlyContinue | Where-Object { $_.PSChildName -match '^\d{4}$' })) {
+    $q = RG $k.PSPath 'HardwareInformation.qwMemorySize'
+    $d = RG $k.PSPath 'DriverDesc'
+    if ($q.exists -and [int64]$q.value -gt $vram -and $d.value -notmatch 'Remote|Virtual|Parsec|Basic') { $vram = [int64]$q.value; $vname = [string]$d.value }
+  }
+  if ($vram -gt 0) {
+    $gb = [double]$vram / 1GB
+    $txt = ($vname + ' · ' + ('{0:N0} GB' -f $gb))
+    if ($gb -lt 4) { Add '그래픽·게임' '그래픽 메모리 (VRAM)' 'info' $txt '그래픽 메모리가 적으면 최신 게임에서 끊김이 생깁니다. 게임의 텍스처 품질을 "중간" 이하로 낮추세요.' $null }
+    else { Add '그래픽·게임' '그래픽 메모리 (VRAM)' 'ok' $txt '' $null }
+  }
+} catch {}
+
+try {
+  if ($laptop) {
+    $bat = @(Get-CimInstance Win32_Battery)[0]
+    if ([int]$bat.BatteryStatus -eq 1) { Add '그래픽·게임' '전원 연결 (노트북)' 'warn' ('배터리 사용 중 · ' + $bat.EstimatedChargeRemaining + '%') '노트북은 충전기를 연결해야 CPU·GPU 가 최대 성능을 냅니다. 배터리로는 FPS 가 크게 떨어집니다.' $null }
+    else { Add '그래픽·게임' '전원 연결 (노트북)' 'ok' ('충전기 연결됨 · ' + $bat.EstimatedChargeRemaining + '%') '' $null }
+  }
+} catch {}
+
+try {
+  $dg = Get-CimInstance -Namespace 'root\Microsoft\Windows\DeviceGuard' -ClassName Win32_DeviceGuard -ErrorAction Stop
+  if ([int]$dg.VirtualizationBasedSecurityStatus -eq 2) { Add '그래픽·게임' '가상화 기반 보안 (VBS)' 'info' '실행 중' 'VBS 는 보안 기능이지만 일부 CPU 에서 게임 성능을 몇 % 낮춥니다. 메모리 무결성 항목과 함께 판단하세요.' $null }
+  else { Add '그래픽·게임' '가상화 기반 보안 (VBS)' 'ok' '꺼짐' '' $null }
+} catch {}
+
+# ───── 백그라운드 ─────
+try {
+  $t0 = @{}
+  foreach ($p in Get-Process) { try { $t0[$p.Id] = $p.TotalProcessorTime.TotalMilliseconds } catch {} }
+  Start-Sleep -Milliseconds 1500
+  $cores = [Environment]::ProcessorCount
+  $use = @{}
+  foreach ($p in Get-Process) {
+    try {
+      if (-not $t0.ContainsKey($p.Id) -or $p.Id -eq $PID -or $p.ProcessName -eq 'Idle') { continue }
+      $pc = ($p.TotalProcessorTime.TotalMilliseconds - $t0[$p.Id]) / 1500 / $cores * 100
+      $use[$p.ProcessName] = [double]$use[$p.ProcessName] + $pc
+    } catch {}
+  }
+  $top = @($use.GetEnumerator() | Sort-Object Value -Descending | Select-Object -First 3)
+  $txt = (@($top | Where-Object { $_.Value -ge 1 } | ForEach-Object { $_.Key + ' ' + [math]::Round($_.Value) + '%' }) -join ', ')
+  if (-not $txt) { $txt = '모두 1% 미만' }
+  if ($top.Count -and $top[0].Value -ge 15) { Add '백그라운드' 'CPU 를 많이 쓰는 프로그램' 'warn' $txt '게임 전에 이 프로그램을 닫으면 FPS 와 반응 속도가 좋아집니다.' $null }
+  else { Add '백그라운드' 'CPU 를 많이 쓰는 프로그램' 'ok' $txt '' $null }
+} catch {}
+
+try {
+  $mem = @(Get-Process | Group-Object ProcessName | ForEach-Object { [pscustomobject]@{ n = $_.Name; m = [double](($_.Group | Measure-Object WorkingSet64 -Sum).Sum) } } | Sort-Object m -Descending | Select-Object -First 3)
+  $txt = (@($mem | ForEach-Object { $_.n + ' ' + ('{0:N1}' -f ($_.m / 1GB)) + 'GB' }) -join ', ')
+  if ($mem.Count -and $mem[0].m -gt 3GB) { Add '백그라운드' '메모리를 많이 쓰는 프로그램' 'warn' $txt '메모리를 많이 쓰는 프로그램(브라우저 탭 등)을 닫거나 메모리 정리를 실행하세요.' (Fx 'action' 'trimMemory') }
+  else { Add '백그라운드' '메모리를 많이 쓰는 프로그램' 'ok' $txt '' $null }
+} catch {}
+
+try {
+  $ov = @{ 'RTSS' = 'RivaTuner'; 'MSIAfterburner' = 'MSI Afterburner'; 'Overwolf' = 'Overwolf'; 'obs64' = 'OBS Studio'; 'GameBar' = 'Xbox Game Bar'; 'NVIDIA Share' = 'NVIDIA 오버레이'; 'Medal' = 'Medal'; 'Outplayed' = 'Outplayed'; 'XSplit.Core' = 'XSplit' }
+  $run = @(Get-Process | Where-Object { $ov.ContainsKey($_.ProcessName) } | ForEach-Object { $ov[$_.ProcessName] } | Select-Object -Unique)
+  if ($run.Count) { Add '백그라운드' '오버레이·녹화 프로그램' 'info' ($run -join ', ') '화면 위에 그리거나 녹화하는 프로그램은 FPS 를 조금 낮추고 입력 지연을 늘릴 수 있습니다. 쓰지 않을 땐 꺼 두세요.' $null }
+  else { Add '백그라운드' '오버레이·녹화 프로그램' 'ok' '실행 중인 것 없음' '' $null }
+} catch {}
+
+# ───── 추가 검사: 보안 ─────
+try {
+  $tpm = Get-CimInstance -Namespace 'root\cimv2\Security\MicrosoftTpm' -ClassName Win32_Tpm -ErrorAction Stop
+  if ($tpm -and $tpm.IsEnabled_InitialValue) { Add '보안' 'TPM' 'ok' ('켜짐 · ' + ([string]$tpm.SpecVersion).Split(',')[0].Trim()) '' $null }
+  else { Add '보안' 'TPM' 'warn' '꺼짐' 'Windows 11 과 발로란트(뱅가드) 등 일부 안티치트는 TPM 2.0 이 필요합니다. BIOS 에서 fTPM/PTT 를 켜세요.' $null }
+} catch { Add '보안' 'TPM' 'info' '확인 불가 (관리자 권한 필요)' '' $null }
+
+try {
+  $smb = RG 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\mrxsmb10' 'Start'
+  if ($smb.exists -and [int]$smb.value -ne 4) { Add '보안' 'SMBv1 (구형 파일 공유)' 'warn' '켜짐' '워너크라이 랜섬웨어가 이용한 오래된 프로토콜입니다. "Windows 기능 켜기/끄기"에서 SMB 1.0 을 끄세요.' $null }
+  else { Add '보안' 'SMBv1 (구형 파일 공유)' 'ok' '꺼짐' '' $null }
+} catch {}
+
+try {
+  $rdp = RG 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Terminal Server' 'fDenyTSConnections'
+  if ($rdp.exists -and [int]$rdp.value -eq 0) { Add '보안' '원격 데스크톱' 'info' '켜짐' '원격 데스크톱을 쓰지 않는다면 설정 > 시스템 > 원격 데스크톱에서 끄는 것이 안전합니다.' $null }
+  else { Add '보안' '원격 데스크톱' 'ok' '꺼짐' '' $null }
+} catch {}
+
+try {
+  $g = @(Get-LocalUser -ErrorAction Stop | Where-Object { $_.SID.Value -like '*-501' -and $_.Enabled })
+  if ($g.Count) { Add '보안' 'Guest 계정' 'warn' '켜짐' '암호 없는 Guest 계정이 켜져 있습니다. 쓰지 않는다면 끄세요.' $null }
+  else { Add '보안' 'Guest 계정' 'ok' '꺼짐' '' $null }
+} catch {}
+
+try {
+  $mp2 = Get-MpComputerStatus -ErrorAction Stop
+  if ($mp2.RealTimeProtectionEnabled) {
+    $age = [int]$mp2.QuickScanAge
+    if ($age -gt 14) { Add '보안' '마지막 바이러스 검사' 'info' ($age.ToString() + '일 전') '2주 넘게 검사하지 않았습니다. Windows 보안에서 빠른 검사를 한 번 실행하세요.' $null }
+    else { Add '보안' '마지막 바이러스 검사' 'ok' ($age.ToString() + '일 전') '' $null }
+  }
+} catch {}
+
+# ───── 추가 검사: 네트워크 ─────
+try {
+  $srv = @(Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction Stop | Where-Object { $_.ServerAddresses.Count -gt 0 -and $_.InterfaceAlias -notmatch 'Loopback|vEthernet|VirtualBox|VMware' } | ForEach-Object { $_.ServerAddresses } | Select-Object -Unique)
+  if ($srv.Count) {
+    $s = $srv[0]
+    # 로컬 DNS 캐시를 거치지 않도록 DNS 서버에 직접 묻는다
+    $ms = [int](Measure-Command { Resolve-DnsName -Name 'www.google.com' -Server $s -DnsOnly -Type A -ErrorAction Stop | Out-Null }).TotalMilliseconds
+    $txt = ($s + ' · ' + $ms + 'ms')
+    if ($ms -gt 100) { Add '네트워크·시작' 'DNS 응답 속도' 'warn' $txt 'DNS 가 느리면 게임 서버 접속·웹 로딩이 늦어집니다. 1.1.1.1 이나 8.8.8.8 같은 공용 DNS 를 고려해 보세요.' $null }
+    else { Add '네트워크·시작' 'DNS 응답 속도' 'ok' $txt '' $null }
+  }
+} catch { Add '네트워크·시작' 'DNS 응답 속도' 'info' '확인 불가' '' $null }
+
+try {
+  $ie = RG 'Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Internet Settings' 'ProxyEnable'
+  if ($ie.exists -and [int]$ie.value -eq 1) {
+    $ps = RG 'Registry::HKEY_CURRENT_USER\Software\Microsoft\Windows\CurrentVersion\Internet Settings' 'ProxyServer'
+    Add '네트워크·시작' '프록시 설정' 'warn' ('켜짐 · ' + [string]$ps.value) '직접 설정하지 않았다면 악성 프로그램일 수 있습니다. 프록시는 핑을 높입니다. 설정 > 네트워크 > 프록시에서 확인하세요.' $null
+  } else { Add '네트워크·시작' '프록시 설정' 'ok' '사용 안 함' '' $null }
+} catch {}
+
+try {
+  if (@(Get-NetAdapter -Physical -ErrorAction Stop | Where-Object { $_.Status -eq 'Up' -and ($_.NdisPhysicalMedium -eq 9 -or $_.InterfaceDescription -match 'Wi-?Fi|Wireless|802\.11|무선') }).Count) {
+    $ErrorActionPreference = 'Continue'
+    $w = (& netsh.exe wlan show interfaces 2>&1 | ForEach-Object { [string]$_ }) -join ' '
+    $ErrorActionPreference = 'Stop'
+    if ($w -match '(\d{1,3})\s*%') {
+      $sig = [int]$matches[1]
+      if ($sig -lt 60) { Add '네트워크·시작' 'Wi-Fi 신호 세기' 'warn' ($sig.ToString() + '%') '신호가 약하면 핑이 튀고 패킷이 손실됩니다. 공유기와 가까이 두거나 5GHz·유선 연결을 권장합니다.' $null }
+      else { Add '네트워크·시작' 'Wi-Fi 신호 세기' 'ok' ($sig.ToString() + '%') '' $null }
+    }
+  }
+} catch { $ErrorActionPreference = 'Stop' }
 
 Emit @{ results = $script:R }
 `;

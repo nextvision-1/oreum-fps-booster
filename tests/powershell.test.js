@@ -147,7 +147,12 @@ test('모든 최적화 항목의 현재 값 읽기 성공 (pcfg 는 계획 GUID 
 
 test('정밀 시스템 검사 실행', { skip: !WIN, timeout: 5 * 60 * 1000 }, async () => {
   const res = (await runPS(CHECK_SCRIPT, {}, { timeout: 5 * 60 * 1000 })).results;
-  assert.ok(res.length >= 12, `결과 ${res.length}개`);
+  // PC 에 따라 조건부 항목(노트북 전원·Wi-Fi·추가 드라이브 등)이 있어 최소 개수로 확인
+  assert.ok(res.length >= 40, `결과 ${res.length}개`);
+  const names = res.map((r) => r.name);
+  for (const n of ['Windows 정품 인증', '블루스크린 (최근 30일)', '그래픽 드라이버 멈춤 (최근 30일)', 'RAM 속도', 'CPU 를 많이 쓰는 프로그램', '패킷 손실', 'DNS 응답 속도']) {
+    assert.ok(names.includes(n), `${n} 항목이 결과에 없음 (해당 검사가 오류로 건너뛰어졌을 수 있음)`);
+  }
   for (const r of res) {
     assert.ok(['ok', 'warn', 'bad', 'info'].includes(r.status), JSON.stringify(r));
     assert.ok(r.group && r.name, JSON.stringify(r));
