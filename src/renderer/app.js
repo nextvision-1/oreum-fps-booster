@@ -59,6 +59,7 @@ function goto(page) {
   if (page === 'bloat') loadBloat();
   if (page === 'cleaner') loadDrives();
   if (page === 'history') loadHistory();
+  if (page === 'bench') loadBench();
 }
 $('#nav').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-page]');
@@ -142,7 +143,6 @@ function paintStatus() {
     const s = STATUS[t.id] || { status: 'off' };
     for (const card of $$(`.item[data-id="${t.id}"]`)) {
       $('input', card).checked = s.status === 'on' || s.status === 'partial';
-      $('input', card).disabled = s.status === 'na';
       const b = $('.badge.st', card);
       b.className = 'badge st ' + (s.status === 'on' ? 'on' : s.status === 'partial' ? 'partial' : '');
       b.textContent = s.status === 'on' ? '적용됨' : s.status === 'partial' ? '일부 적용' : s.status === 'na' ? '해당 없음' : '미적용';
@@ -226,12 +226,26 @@ async function boost() {
     const ok = await runAction('restorePoint', true);
     if (!ok && !(await call('confirm', '복원 지점을 만들지 못했습니다. (시스템 보호가 꺼져 있거나 최근에 이미 생성됨)\n그래도 계속할까요?'))) return;
   }
-  await withBusy(`최적화 ${ids.length}개 적용 중…`, async () => {
+  const measure = $('#chkBench').checked;
+  let before = null;
+  if (measure) before = await runSystemBench('최적화 전', true);
+  const applied = await withBusy(`최적화 ${ids.length}개 적용 중…`, async () => {
     const r = await call('apply', ids);
     afterApply(r);
     toast(`🚀 ${r.applied.length}개 최적화 적용 완료${r.errors.length ? `\n(일부 값 실패 ${r.errors.length}건 — 작업 기록의 로그 확인)` : ''}`, r.errors.length > 0);
+    return r;
   });
   await refreshStatus();
+  if (measure && before && applied) {
+    await new Promise((res) => setTimeout(res, 3000)); // 설정이 자리 잡을 시간
+    const after = await runSystemBench('최적화 후', true);
+    if (after) {
+      cmpKind = 'system';
+      cmpSel = { a: before.id, b: after.id };
+      goto('bench');
+      if (applied.reboot) toast('재부팅이 필요한 항목이 있습니다. 재부팅 후 "재부팅 후"로 한 번 더 측정하면 효과가 더 정확히 나옵니다.');
+    }
+  }
 }
 $('#btnBoost').addEventListener('click', boost);
 $('#btnBoost2').addEventListener('click', boost);
@@ -350,7 +364,7 @@ api.on('monitor', (m) => {
 window.addEventListener('resize', paintTiles);
 
 // ───────── 작업 기록 ─────────
-const HIST_ICON = { optimize: '🚀', restore: '↩', clean: '🧹', check: '🩺', bloat: '🗑', startup: '⏱', action: '⚙', guard: '🛡' };
+const HIST_ICON = { bench: '📊', optimize: '🚀', restore: '↩', clean: '🧹', check: '🩺', bloat: '🗑', startup: '⏱', action: '⚙', guard: '🛡' };
 function histRows(list) {
   if (!list.length) return '<div class="empty">아직 기록이 없습니다.</div>';
   return list.map((h) => `<div class="h"><time>${esc(fmtTime(h.time))}</time><span>${HIST_ICON[h.type] || '•'} ${esc(h.text)}</span></div>`).join('');
@@ -481,9 +495,9 @@ $('#btnCheck').addEventListener('click', () => withBusy('시스템을 검사하�
           if (r.fix.type === 'action') return runAction(r.fix.id);
           const t = META.tweaks.find((x) => x.id === r.fix.id);
           if (t) {
-            await toggleTweak(t, true, { checked: true });
-            // 취소·실패 시에는 버튼을 그대로 둔다
-            if (STATUS[t.id]?.status === 'on') { b.textContent = '적용됨'; b.disabled = true; }
+            const fake = { checked: true };
+            await toggleTweak(t, true, fake);
+            if (fake.checked) { b.textContent = '적용됨'; b.disabled = true; }
           }
         });
         row.appendChild(b);
@@ -507,19 +521,16 @@ async function loadStartup() {
       el.className = 'card item';
       el.innerHTML = `
         <div class="body">
-          <div class="title">${esc(it.name)} <span class="badge">${esc(it.label)}</span></div>
+          <div class="title">${esc(it.name)} <span class="badge">${it.src === 'HKCU' ? '현재 사용자' : '모든 사용자'}</span></div>
           <div class="cmd" title="${esc(it.cmd)}">${esc(it.cmd)}</div>
         </div>
         <label class="switch"><input type="checkbox" ${it.enabled ? 'checked' : ''} /><span class="slider"></span></label>`;
       $('input', el).addEventListener('change', async (e) => {
-        const input = e.target;
-        const en = input.checked;
-        const ok = await withBusy('변경 중…', async () => {
-          await call('startup:set', { src: it.src, name: it.name }, en);
+        const en = e.target.checked;
+        await withBusy('변경 중…', async () => {
+          await call('startup:set', it, en);
           toast(`${it.name}: 시작 시 실행 ${en ? '켜짐' : '꺼짐'}`);
-          return true;
         });
-        if (!ok) input.checked = !en; // 실패(권한 부족 등) 시 스위치를 원래대로
       });
       box.appendChild(el);
     }
@@ -564,6 +575,217 @@ $('#btnBloatRemove').addEventListener('click', async () => {
   });
   loadBloat();
 });
+
+
+// ───────── 전/후 성능 비교 ─────────
+let BMETA = null;
+let RUNS = [];
+let cmpKind = 'system';
+let cmpSel = { a: null, b: null };
+const COL_A = '#8577ee', COL_B = '#17a878';
+
+api.on('bench:progress', (p) => {
+  $('#busyText').textContent = `${p.text}${p.pct != null && p.pct < 100 ? `  (${p.pct}%)` : ''}`;
+});
+
+async function runSystemBench(label, silent = false) {
+  return withBusy('시스템 벤치마크 준비 중…', async () => {
+    const run = await call('bench:system', label);
+    if (run.gpuError) log('그래픽 테스트 건너뜀: ' + run.gpuError);
+    if (!silent) toast(`📊 측정 완료 (${run.label}) — 그래픽 ${fmtNum(run.metrics.gpuFps, 0)} FPS · CPU 멀티 ${fmtNum(run.metrics.cpuMulti, 0)}점`);
+    RUNS.unshift(run);
+    return run;
+  });
+}
+
+const fmtNum = (v, d = 1) => (v == null || Number.isNaN(Number(v)) ? '-' : Number(v).toLocaleString('ko-KR', { minimumFractionDigits: d, maximumFractionDigits: d }));
+const runName = (r) => `${r.label} · ${fmtTime(r.time)}${r.kind === 'game' ? ' · ' + r.app : ''}`;
+
+async function loadBench() {
+  try {
+    if (!BMETA) BMETA = await call('bench:meta');
+    RUNS = await call('bench:list');
+  } catch (e) { toast(e.message, true); return; }
+  $('#pmNote').textContent = BMETA.presentmon ? '' : '처음 측정할 때 Intel PresentMon(무료, 오픈소스 FPS 측정 도구)을 자동으로 내려받습니다.';
+  renderRuns();
+  renderCompare();
+}
+
+function renderRuns() {
+  const box = $('#benchRuns');
+  if (!RUNS.length) { box.innerHTML = '<div class="empty">아직 측정 기록이 없습니다. 위에서 "최적화 전" 측정부터 시작하세요.</div>'; return; }
+  box.innerHTML = '';
+  for (const r of RUNS) {
+    const el = document.createElement('div');
+    el.className = 'card item';
+    const m = r.metrics;
+    const sum = r.kind === 'game'
+      ? `평균 ${fmtNum(m.avgFps)} FPS · 1% Low ${fmtNum(m.low1)} · ${r.seconds}초 · ${Number(r.frames).toLocaleString()}프레임`
+      : `그래픽 ${fmtNum(m.gpuFps, 0)} FPS · 1% Low ${fmtNum(m.gpuLow1, 0)} · CPU ${fmtNum(m.cpuSingle, 0)}/${fmtNum(m.cpuMulti, 0)}점 · 끊김 ${fmtNum(m.spikes, 0)}회`;
+    el.innerHTML = `<div class="body"><div class="title">${r.kind === 'game' ? '🎮' : '🖥'} ${esc(runName(r))}</div><div class="desc">${esc(sum)}</div></div><button class="btn small ghost">삭제</button>`;
+    $('button', el).addEventListener('click', async () => {
+      if (!(await call('confirm', `"${runName(r)}" 측정 기록을 삭제할까요?`))) return;
+      await call('bench:delete', r.id);
+      RUNS = RUNS.filter((x) => x.id !== r.id);
+      renderRuns(); renderCompare();
+    });
+    box.appendChild(el);
+  }
+}
+
+function renderCompare() {
+  $$('#cmpKind .chip').forEach((c) => c.classList.toggle('active', c.dataset.kind === cmpKind));
+  const runs = RUNS.filter((r) => r.kind === cmpKind);
+  const selA = $('#cmpA'), selB = $('#cmpB');
+  const opts = runs.map((r) => `<option value="${r.id}">${esc(runName(r))}</option>`).join('');
+  selA.innerHTML = opts; selB.innerHTML = opts;
+  if (runs.length < 2) {
+    $('#cmpHeadline').innerHTML = '';
+    $('#cmpTable').innerHTML = `<div class="empty">비교하려면 측정 기록이 2개 이상 필요합니다. (현재 ${runs.length}개)</div>`;
+    $('#ftWrap').classList.add('hidden');
+    return;
+  }
+  // 기본 선택: "최적화 전" 중 가장 최근 것과 가장 최근 측정
+  if (!runs.find((r) => r.id === cmpSel.a) || !runs.find((r) => r.id === cmpSel.b)) {
+    const b = runs[0];
+    const a = runs.find((r) => r.id !== b.id && r.label === '최적화 전' && (r.kind !== 'game' || r.app === b.app)) || runs[1];
+    cmpSel = { a: a.id, b: b.id };
+  }
+  selA.value = cmpSel.a; selB.value = cmpSel.b;
+  const A = runs.find((r) => r.id === cmpSel.a), B = runs.find((r) => r.id === cmpSel.b);
+  const defs = cmpKind === 'game' ? BMETA.game : BMETA.system;
+
+  const pct = (d, a, b) => {
+    if (a == null || b == null || !Number(a)) return null;
+    const ch = ((b - a) / Math.abs(a)) * 100;
+    return d.better === 'up' ? ch : -ch; // +면 개선
+  };
+  const deltaHtml = (d, a, b) => {
+    const p = pct(d, a, b);
+    if (p == null) return '<span class="delta same">-</span>';
+    const raw = ((b - a) / Math.abs(a)) * 100;
+    const cls = Math.abs(p) < 1 ? 'same' : p > 0 ? 'good' : 'bad';
+    const word = Math.abs(p) < 1 ? '비슷' : p > 0 ? '개선' : '저하';
+    const arrow = raw > 0 ? '▲' : raw < 0 ? '▼' : '';
+    return `<span class="delta ${cls}">${arrow} ${Math.abs(raw).toFixed(1)}% ${word}</span>`;
+  };
+
+  // 헤드라인 3개
+  const heads = cmpKind === 'game' ? ['avgFps', 'low1', 'stutters'] : ['gpuFps', 'gpuLow1', 'cpuMulti'];
+  $('#cmpHeadline').innerHTML = heads.map((k) => {
+    const d = defs.find((x) => x.key === k);
+    const a = A.metrics[k], b = B.metrics[k];
+    return `<div class="hl"><div class="k">${esc(d.name)}</div><div class="v">${fmtNum(b, d.digits)} <span class="small muted">${d.unit}</span></div>${deltaHtml(d, a, b)}</div>`;
+  }).join('');
+
+  const rows = defs.map((d) => {
+    const a = A.metrics[d.key], b = B.metrics[d.key];
+    const mx = Math.max(Number(a) || 0, Number(b) || 0) || 1;
+    const w = (v) => `${Math.max(1, ((Number(v) || 0) / mx) * 100).toFixed(1)}`;
+    return `<tr><td>${esc(d.name)}</td><td class="num">${fmtNum(a, d.digits)} ${d.unit}</td><td class="num">${fmtNum(b, d.digits)} ${d.unit}</td>
+      <td class="bars"><div class="a" data-w="${w(a)}" title="기준 ${fmtNum(a, d.digits)} ${d.unit}"></div><div class="b" data-w="${w(b)}" title="비교 ${fmtNum(b, d.digits)} ${d.unit}"></div></td>
+      <td class="num">${deltaHtml(d, a, b)}</td></tr>`;
+  }).join('');
+  $('#cmpTable').innerHTML = `<table class="cmpt"><thead><tr><th>항목</th><th class="num">기준</th><th class="num">비교</th><th>그래프</th><th class="num">변화</th></tr></thead><tbody>${rows}</tbody></table>`;
+  $$('#cmpTable .bars div').forEach((el) => { el.style.width = el.dataset.w + '%'; });
+  if (cmpKind === 'game' && A.app !== B.app) toast('서로 다른 게임의 기록을 비교하고 있습니다.', true);
+
+  const showFt = cmpKind === 'game' && A.series && B.series;
+  $('#ftWrap').classList.toggle('hidden', !showFt);
+  ftPair = showFt ? [A, B] : null;
+  if (showFt) drawFt(A, B);
+}
+let ftPair = null;
+
+let ftHover = null;
+function drawFt(A, B) {
+  const cv = $('#ftChart');
+  const dpr = window.devicePixelRatio || 1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if (!w) return;
+  cv.width = w * dpr; cv.height = h * dpr;
+  const ctx = cv.getContext('2d');
+  ctx.scale(dpr, dpr);
+  const padL = 40, padB = 18, padT = 6;
+  const all = [...A.series, ...B.series].sort((x, y) => x - y);
+  const top = Math.max(5, all[Math.floor(all.length * 0.995)] * 1.15);
+  const X = (i, n) => padL + (i / Math.max(1, n - 1)) * (w - padL - 8);
+  const Y = (v) => padT + (1 - Math.min(v, top) / top) * (h - padT - padB);
+  ctx.font = '11px Segoe UI, Malgun Gothic, sans-serif';
+  ctx.fillStyle = '#8b98a9';
+  ctx.strokeStyle = 'rgba(139,152,169,.18)';
+  ctx.lineWidth = 1;
+  for (let g = 0; g <= 4; g++) {
+    const v = (top / 4) * g, y = Y(v);
+    ctx.beginPath(); ctx.moveTo(padL, y); ctx.lineTo(w - 8, y); ctx.stroke();
+    ctx.fillText(v.toFixed(v < 10 ? 1 : 0) + 'ms', 2, y + 4);
+  }
+  ctx.fillText('측정 시작', padL, h - 3);
+  ctx.textAlign = 'right'; ctx.fillText('끝', w - 8, h - 3); ctx.textAlign = 'left';
+  for (const [s, col] of [[A.series, COL_A], [B.series, COL_B]]) {
+    ctx.beginPath();
+    s.forEach((v, i) => (i ? ctx.lineTo(X(i, s.length), Y(v)) : ctx.moveTo(X(i, s.length), Y(v))));
+    ctx.strokeStyle = col; ctx.lineWidth = 2; ctx.lineJoin = 'round'; ctx.stroke();
+  }
+  const tip = $('#ftTip');
+  if (ftHover != null) {
+    const x = padL + ftHover * (w - padL - 8);
+    ctx.strokeStyle = 'rgba(230,237,245,.4)'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(x, padT); ctx.lineTo(x, h - padB); ctx.stroke();
+    const va = A.series[Math.round(ftHover * (A.series.length - 1))], vb = B.series[Math.round(ftHover * (B.series.length - 1))];
+    for (const [v, col] of [[va, COL_A], [vb, COL_B]]) { ctx.fillStyle = col; ctx.beginPath(); ctx.arc(x, Y(v), 4, 0, 7); ctx.fill(); }
+    tip.innerHTML = `<i class="sw a"></i> 기준 ${va} ms · ${(1000 / va).toFixed(0)} FPS<br><i class="sw b"></i> 비교 ${vb} ms · ${(1000 / vb).toFixed(0)} FPS`;
+    tip.classList.remove('hidden');
+  } else tip.classList.add('hidden');
+}
+$('#ftChart').addEventListener('mousemove', (e) => {
+  const cv = e.currentTarget, padL = 40;
+  ftHover = Math.min(1, Math.max(0, (e.offsetX - padL) / (cv.clientWidth - padL - 8)));
+  if (ftPair) drawFt(...ftPair);
+});
+$('#ftChart').addEventListener('mouseleave', () => { ftHover = null; if (ftPair) drawFt(...ftPair); });
+
+$('#cmpKind').addEventListener('click', (e) => {
+  const c = e.target.closest('.chip');
+  if (!c) return;
+  cmpKind = c.dataset.kind;
+  cmpSel = { a: null, b: null };
+  renderCompare();
+});
+$('#cmpA').addEventListener('change', (e) => { cmpSel.a = e.target.value; renderCompare(); });
+$('#cmpB').addEventListener('change', (e) => { cmpSel.b = e.target.value; renderCompare(); });
+
+$('#bsLabel').addEventListener('change', (e) => $('#bsLabelTxt').classList.toggle('hidden', e.target.value !== ''));
+$('#btnBenchSys').addEventListener('click', async () => {
+  const label = $('#bsLabel').value || $('#bsLabelTxt').value.trim() || '측정';
+  const run = await runSystemBench(label);
+  if (run) { cmpKind = 'system'; cmpSel = { a: null, b: null }; await loadBench(); }
+});
+
+async function loadProcs() {
+  const sel = $('#bgProc');
+  try {
+    const list = await call('bench:procs');
+    sel.innerHTML = list.length
+      ? list.map((p) => `<option value="${p.pid}" data-name="${esc(p.name)}">${esc(p.name)} — ${esc(p.title.slice(0, 40))} (${p.memMB} MB)</option>`).join('')
+      : '<option value="">실행 중인 게임 창이 없습니다</option>';
+  } catch (e) { toast(e.message, true); }
+}
+$('#btnProcRefresh').addEventListener('click', loadProcs);
+$('#btnBenchGame').addEventListener('click', async () => {
+  const sel = $('#bgProc');
+  if (!sel.value) { await loadProcs(); if (!sel.value) return toast('게임을 먼저 실행한 뒤 새로고침을 눌러 선택하세요.', true); }
+  const opt = sel.selectedOptions[0];
+  const params = { pid: Number(sel.value), name: opt.dataset.name, seconds: Number($('#bgSec').value), delay: Number($('#bgDelay').value), label: $('#bgLabel').value };
+  const run = await withBusy('FPS 측정 준비 중…', () => call('bench:game', params));
+  if (run) {
+    toast(`🎮 ${run.app} — 평균 ${fmtNum(run.metrics.avgFps)} FPS · 1% Low ${fmtNum(run.metrics.low1)}`);
+    BMETA.presentmon = true;
+    cmpKind = 'game'; cmpSel = { a: null, b: null };
+    await loadBench();
+  }
+});
+window.addEventListener('resize', () => { if (!$('#page-bench').classList.contains('hidden')) renderCompare(); });
 
 // ───────── 백업·설정 ─────────
 async function loadBackup() {

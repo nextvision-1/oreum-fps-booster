@@ -1,14 +1,12 @@
 {
   "name": "oreum-fps-booster",
-  "version": "2.0.0",
+  "version": "2.1.0",
   "description": "Windows 게임 FPS·입력지연 최적화 도구 (백업/복원 지원)",
   "main": "src/main.js",
   "author": "Oreum",
   "license": "UNLICENSED",
   "scripts": {
     "start": "electron .",
-    "test": "node --test \"tests/*.test.js\"",
-    "smoke": "set OFB_SMOKE=1&& electron .",
     "build": "electron-builder --win --x64"
   },
   "devDependencies": {
@@ -18,17 +16,36 @@
   "build": {
     "appId": "com.oreum.fpsbooster",
     "productName": "Oreum FPS Booster",
-    "directories": { "output": "dist" },
-    "files": ["src/**/*", "package.json"],
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
     "win": {
-      "target": ["portable", "nsis"],
+      "target": [
+        "portable",
+        "nsis"
+      ],
       "requestedExecutionLevel": "requireAdministrator"
     },
-    "portable": { "artifactName": "OreumFPSBooster-${version}-portable.exe" },
+    "portable": {
+      "artifactName": "OreumFPSBooster-${version}-portable.exe"
+    },
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "artifactName": "OreumFPSBooster-${version}-setup.exe"
-    }
+    },
+    "extraResources": [
+      {
+        "from": "tools",
+        "to": "tools",
+        "filter": [
+          "PresentMon.exe"
+        ]
+      }
+    ]
   }
 }

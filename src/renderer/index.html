@@ -18,6 +18,7 @@
     <nav id="nav">
       <button data-page="dash" class="active"><span>🏠</span>대시보드</button>
       <button data-page="optimize"><span>🚀</span>성능 최적화</button>
+      <button data-page="bench"><span>📊</span>전/후 성능 비교</button>
       <button data-page="cleaner"><span>🧹</span>스마트 파일 청소</button>
       <button data-page="check"><span>🩺</span>정밀 시스템 검사</button>
       <button data-page="startup"><span>⏱</span>시작 프로그램</button>
@@ -66,7 +67,10 @@
               <div class="muted" id="scoreText">상태를 확인하는 중…</div>
             </div>
           </div>
-          <label class="chk"><input type="checkbox" id="chkRP" checked /> 적용 전 시스템 복원 지점 만들기</label>
+          <div class="chk-col">
+            <label class="chk"><input type="checkbox" id="chkRP" checked /> 적용 전 시스템 복원 지점 만들기</label>
+            <label class="chk"><input type="checkbox" id="chkBench" checked /> 적용 전·후 성능 자동 측정 (약 2분)</label>
+          </div>
           <div class="row">
             <button class="btn primary big" id="btnBoost">🚀 원클릭 성능 최적화</button>
             <button class="btn ghost" id="btnRevertAll">↩ 모두 되돌리기</button>
@@ -110,6 +114,68 @@
       <div class="chips" id="catChips"></div>
       <div class="actions" id="optActions"></div>
       <div class="list" id="optList"></div>
+    </section>
+
+    <!-- 전/후 성능 비교 -->
+    <section class="page hidden" id="page-bench">
+      <h1>전/후 성능 비교</h1>
+      <p class="muted">최적화 전에 한 번, 적용 후에 한 번 측정해서 실제로 얼마나 좋아졌는지 숫자로 비교합니다. 재부팅이 필요한 항목은 재부팅 후 다시 측정하면 더 정확합니다.</p>
+      <div class="bench-grid">
+        <div class="card">
+          <div class="card-title">🖥 시스템 벤치마크 <span class="muted small">약 45초</span></div>
+          <div class="desc muted">그래픽(고정 장면 FPS·1% Low), CPU 싱글/멀티 점수, 시스템 끊김, 대기 중 CPU·메모리, 핑을 측정합니다. 측정 중에는 다른 작업을 하지 마세요.</div>
+          <div class="form-row">
+            <label>측정 이름</label>
+            <select id="bsLabel"><option>최적화 전</option><option>최적화 후</option><option>재부팅 후</option><option value="">직접 입력…</option></select>
+            <input id="bsLabelTxt" class="hidden" placeholder="예: 드라이버 업데이트 후" />
+          </div>
+          <button class="btn primary" id="btnBenchSys">측정 시작</button>
+        </div>
+        <div class="card">
+          <div class="card-title">🎮 게임 FPS 측정 <span class="muted small">Intel PresentMon</span></div>
+          <div class="desc muted">게임을 켠 상태에서 측정합니다. 시작을 누르고 게임 화면으로 돌아가 평소처럼 플레이하세요. 같은 맵·같은 장면에서 전/후를 재야 비교가 정확합니다.</div>
+          <div class="form-row">
+            <label>게임</label>
+            <select id="bgProc"><option value="">게임을 실행한 뒤 새로고침</option></select>
+            <button class="btn small" id="btnProcRefresh">새로고침</button>
+          </div>
+          <div class="form-row">
+            <label>측정 시간</label>
+            <select id="bgSec"><option value="30">30초</option><option value="60" selected>60초</option><option value="120">120초</option></select>
+            <label>시작 대기</label>
+            <select id="bgDelay"><option value="5">5초</option><option value="10" selected>10초</option><option value="15">15초</option></select>
+          </div>
+          <div class="form-row">
+            <label>측정 이름</label>
+            <select id="bgLabel"><option>최적화 전</option><option>최적화 후</option><option>재부팅 후</option></select>
+          </div>
+          <button class="btn primary" id="btnBenchGame">측정 시작</button>
+          <div class="muted small" id="pmNote"></div>
+        </div>
+      </div>
+
+      <div class="card cmp">
+        <div class="cmp-head">
+          <div class="chips" id="cmpKind">
+            <button class="chip active" data-kind="system">시스템 벤치마크</button>
+            <button class="chip" data-kind="game">게임 FPS</button>
+          </div>
+          <div class="form-row">
+            <label>기준</label><select id="cmpA"></select>
+            <label>비교</label><select id="cmpB"></select>
+          </div>
+        </div>
+        <div id="cmpHeadline" class="cmp-headline"></div>
+        <div class="legend2"><span><i class="sw a"></i>기준</span><span><i class="sw b"></i>비교</span></div>
+        <div id="cmpTable"></div>
+        <div id="ftWrap" class="hidden">
+          <div class="card-title mt16">프레임 시간 그래프 <span class="muted small">(낮고 평평할수록 부드러움)</span></div>
+          <div class="ft-box"><canvas id="ftChart"></canvas><div id="ftTip" class="ft-tip hidden"></div></div>
+        </div>
+      </div>
+
+      <h2>측정 기록</h2>
+      <div class="list" id="benchRuns"></div>
     </section>
 
     <!-- 스마트 파일 청소 -->
