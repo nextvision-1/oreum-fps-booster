@@ -1,4 +1,4 @@
-# Oreum FPS Booster v2.1.0
+# Oreum FPS Booster v2.1.1
 
 Windows 게임 FPS·입력 지연 최적화 프로그램 (Electron). 모든 변경은 자동 백업되고 항목별/전체 되돌리기가 가능합니다.
 
@@ -9,14 +9,14 @@ Windows 게임 FPS·입력 지연 최적화 프로그램 (Electron). 모든 변�
 
 ## exe 만들기
 `빌드.bat` 실행 → `dist` 폴더에
-- `OreumFPSBooster-2.1.0-portable.exe` (설치 없이 실행)
-- `OreumFPSBooster-2.1.0-setup.exe` (설치형)
+- `OreumFPSBooster-2.1.1-portable.exe` (설치 없이 실행)
+- `OreumFPSBooster-2.1.1-setup.exe` (설치형)
 
 빌드된 exe 는 실행 시 자동으로 관리자 권한을 요청합니다.
 
 ## 새 버전 배포 (자동 업데이트)
 앱은 GitHub Releases(`package.json` 의 `build.publish`: `nextvision-1/oreum-fps-booster`)에서 새 버전을 확인합니다.
-1. `package.json` 의 `version` 을 올립니다 (예: 2.1.0 → 2.2.0)
+1. `package.json` 의 `version` 을 올립니다 (예: 2.1.1 → 2.1.2)
 2. GitHub 개인 액세스 토큰(repo 권한)을 환경 변수로 지정하고 배포
    ```
    set GH_TOKEN=ghp_...
