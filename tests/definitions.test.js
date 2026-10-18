@@ -77,7 +77,7 @@ test('청소 항목: 그룹 유효, 위험 경로 없음', () => {
     assert.ok(c.paths.length, c.id);
     for (const p of c.paths) {
       // 루트 폴더·사용자 폴더 전체를 지우는 패턴 금지
-      assert.ok(/^%[A-Za-z]+%\\.+/.test(p), `${c.id}: ${p} 는 환경변수로 시작하는 하위 경로여야 함`);
+      assert.ok(/^%[A-Za-z()0-9]+%\\.+/.test(p), `${c.id}: ${p} 는 환경변수로 시작하는 하위 경로여야 함`);
       assert.ok(!/^%(SystemDrive|WINDIR|USERPROFILE|LOCALAPPDATA|APPDATA|ProgramData)%\\\*$/i.test(p), `${c.id}: ${p} 너무 넓음`);
       assert.ok(!/\.\./.test(p), `${c.id}: 상위 경로 금지`);
     }

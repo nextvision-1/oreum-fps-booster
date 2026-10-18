@@ -20,7 +20,7 @@ Windows 게임 FPS·입력 지연 최적화 프로그램 (Electron). 모든 변�
 | 대시보드 | CPU·GPU·메모리·디스크·네트워크 실시간 그래프, 최적화 적용률, 시스템 정보, 최근 작업 |
 | 전/후 성능 비교 | 시스템 벤치마크(그래픽 FPS·1% Low, CPU 싱글/멀티, 끊김, 대기 CPU·메모리, 핑) + 게임 FPS 측정(Intel PresentMon: 평균·1%·0.1% Low, 프레임 시간 그래프). 원클릭 최적화 시 전·후 자동 측정 |
 | 성능 최적화 (41개) | 전원·CPU 10 / 게임·그래픽 9 / 네트워크·입력 7 / 시스템·백그라운드 15. 위험도(안전·주의·위험) 표시, 원클릭은 "권장"만 적용 |
-| 스마트 파일 청소 (22개) | Windows 임시파일·업데이트 잔여물·로그·덤프, Chrome/Edge/웨일/Firefox/Opera 캐시, Steam/Epic/Battle.net/Riot/Discord, 셰이더 캐시(선택), 휴지통. 드라이브 사용량 표시 |
+| 스마트 파일 청소 (47개) | Windows 임시파일·업데이트 잔여물·로그·덤프·진단 로그, 사용 기록(선택), Chrome/Edge/웨일/Brave/Vivaldi/Firefox/Opera(GX) 캐시, Steam/Epic/Battle.net/Riot/EA/Ubisoft/GOG/Minecraft/Roblox/OBS, Discord/Teams/Slack/Zoom/VS Code, 셰이더 캐시(선택), 휴지통. 드라이브 사용량 표시 |
 | 정밀 시스템 검사 | 시스템·메모리/디스크·그래픽/게임·보안·네트워크 약 25개 항목 → 정상/주의/위험 + 해결 버튼, SFC·DISM 무결성 검사 |
 | 시작 프로그램 | 레지스트리 Run 키 + 시작 폴더의 자동 실행 켜기/끄기 (작업 관리자와 같은 방식) |
 | 기본 앱 제거 | 뉴스·날씨·Clipchamp·Teams·Candy Crush 등 40여 종 중 설치된 것만 표시 |
