@@ -108,12 +108,13 @@ function gpuTest(seconds) {
 const GPU_BENCH_VER = 2;
 
 // 메인 프로세스 쪽: 앱 exe 를 --gpu-bench 로 한 번 더 띄워 결과 파일을 받아 온다
-function gpuTestIsolated(seconds) {
+function gpuTestIsolated(seconds, onSpawn) {
   return new Promise((resolve) => {
     const out = path.join(os.tmpdir(), `ofb_gpu_${Date.now()}.json`);
     const args = [...(app.isPackaged ? [] : [app.getAppPath()]), '--gpu-bench', `--seconds=${seconds}`, `--out=${out}`];
     let p;
     try { p = spawn(process.execPath, args, { stdio: 'ignore' }); } catch (e) { return resolve({ error: '그래픽 테스트를 시작하지 못했습니다: ' + e.message }); }
+    if (onSpawn) onSpawn(p.pid);
     const kill = setTimeout(() => { try { p.kill(); } catch (_) {} }, (seconds + 60) * 1000);
     const done = () => {
       clearTimeout(kill);
@@ -267,30 +268,58 @@ async function runGameBench(opts) {
   try { return await measureGame(opts); } finally { gameRunning = false; }
 }
 
-async function measureGame({ pid, name, seconds, delay, label, progress }) {
-  const pm = await pmEnsure(progress);
-  const csv = path.join(os.tmpdir(), `ofb_pm_${Date.now()}.csv`);
-  const args = ['--process_id', String(pid), '--output_file', csv, '--timed', String(seconds), '--terminate_after_timed',
+// PresentMon 으로 한 번 측정해 프레임 시간을 돌려준다 (게임 측정·자가진단 공용)
+// target: { name: 'game.exe' } (같은 이름의 모든 프로세스) 또는 { pid }
+// 실패하면 원인을 알 수 있도록 종료 코드·PresentMon 출력·잡힌 프레임 수를 담아 오류를 던진다.
+async function pmCapture({ target, seconds, delay = 0, onTick }) {
+  const pm = await pmEnsure();
+  const base = `ofb_pm_${Date.now()}`;
+  const csv = path.join(os.tmpdir(), base + '.csv');
+  // 실행 파일 이름으로 지정하면 런처·재시작 등으로 PID 가 바뀌거나 렌더링 프로세스가 따로 있어도 잡힌다
+  const tgt = target.name ? ['--process_name', target.name] : ['--process_id', String(target.pid)];
+  const args = [...tgt, '--output_file', csv, '--timed', String(seconds), '--terminate_after_timed',
     '--stop_existing_session', '--no_console_stats', '--v1_metrics', '--session_name', 'OreumFPSBooster'];
   if (delay > 0) args.push('--delay', String(delay));
-  await new Promise((resolve, reject) => {
+  const { code, out } = await new Promise((resolve, reject) => {
     const p = spawn(pm, args, { windowsHide: true });
-    let err = '';
-    p.stderr.on('data', (d) => { err += d; });
-    p.stdout.on('data', (d) => { err += d; });
+    let o = '';
+    p.stderr.on('data', (d) => { o += d; });
+    p.stdout.on('data', (d) => { o += d; });
     const t0 = Date.now();
-    const tick = setInterval(() => {
-      const el = (Date.now() - t0) / 1000;
+    const tick = onTick && setInterval(() => onTick((Date.now() - t0) / 1000), 500);
+    const kill = setTimeout(() => { try { p.kill(); } catch (_) {} }, (seconds + delay + 40) * 1000);
+    p.on('error', (e) => { clearInterval(tick); clearTimeout(kill); reject(new Error('PresentMon 을 실행하지 못했습니다: ' + e.message)); });
+    p.on('exit', (c) => { clearInterval(tick); clearTimeout(kill); resolve({ code: c, out: o }); });
+  });
+  // PresentMon 은 경우에 따라 파일 이름 뒤에 번호를 붙여 저장하므로 같은 이름으로 시작하는 CSV 를 모두 찾는다
+  const files = fs.readdirSync(os.tmpdir()).filter((f) => f.startsWith(base) && f.toLowerCase().endsWith('.csv')).map((f) => path.join(os.tmpdir(), f));
+  const msg = String(out).replace(/\s+/g, ' ').trim().slice(0, 300);
+  if (!files.length) {
+    const hint = /access denied|elevat|administrat/i.test(out) ? '관리자 권한으로 실행해야 합니다.'
+      : /not find|no process|could not|unknown/i.test(out) ? '게임이 실행 중인지, 목록에서 올바른 게임을 골랐는지 확인하세요.'
+      : '게임이 실행 중이고 화면에 표시된 상태(최소화 X)인지 확인하세요.';
+    throw new Error(`측정 데이터가 만들어지지 않았습니다. ${hint} (PresentMon 종료 코드 ${code}${msg ? ': ' + msg : ''})`);
+  }
+  let parsed = null;
+  try {
+    // 여러 파일이면 프레임이 가장 많은 것을 쓴다
+    for (const f of files) { const p = parseCsv(fs.readFileSync(f, 'utf8')); if (p && (!parsed || p.ft.length > parsed.ft.length)) parsed = p; }
+  } finally { files.forEach((f) => { try { fs.unlinkSync(f); } catch (_) {} }); }
+  const n = parsed ? parsed.ft.length : 0;
+  if (n < 30) throw new Error(`프레임이 ${n}개만 기록됐습니다. 측정하는 동안 게임 화면이 표시돼 있어야 합니다 (다른 창·최소화 X). 게임이 아닌 런처를 골랐는지도 확인하세요. (PresentMon 종료 코드 ${code})`);
+  return parsed;
+}
+
+async function measureGame({ pid, name, seconds, delay, label, progress }) {
+  progress(3, 'FPS 측정 도구 확인 중…');
+  const parsed = await pmCapture({
+    target: name ? { name: name.toLowerCase().endsWith('.exe') ? name : name + '.exe' } : { pid },
+    seconds, delay,
+    onTick: (el) => {
       if (el < delay) progress(Math.round((el / (delay + seconds)) * 100), `${Math.ceil(delay - el)}초 뒤 측정 시작 — 지금 게임 화면으로 돌아가 평소처럼 플레이하세요`);
       else progress(Math.min(99, Math.round((el / (delay + seconds)) * 100)), `${name} 측정 중… ${Math.max(0, Math.ceil(delay + seconds - el))}초 남음`);
-    }, 500);
-    const kill = setTimeout(() => { try { p.kill(); } catch (_) {} }, (seconds + delay + 40) * 1000);
-    p.on('error', (e) => { clearInterval(tick); clearTimeout(kill); reject(e); });
-    p.on('exit', () => { clearInterval(tick); clearTimeout(kill); fs.existsSync(csv) ? resolve() : reject(new Error('측정 데이터가 없습니다. 관리자 권한으로 실행했는지, 게임이 실행 중인지 확인하세요. ' + err.slice(0, 200))); });
+    },
   });
-  let parsed;
-  try { parsed = parseCsv(fs.readFileSync(csv, 'utf8'), pid); } finally { try { fs.unlinkSync(csv); } catch (_) {} }
-  if (!parsed || parsed.ft.length < 30) throw new Error('프레임이 거의 기록되지 않았습니다. 게임이 화면에 표시된 상태(최소화 X)에서 측정하세요.');
   const st = frameStats(parsed.ft);
   const run = {
     id: Date.now().toString(36), kind: 'game', time: new Date().toISOString(), label: label || '측정',
@@ -305,7 +334,7 @@ async function measureGame({ pid, name, seconds, delay, label, progress }) {
 
 module.exports = {
   SYSTEM_METRICS, GAME_METRICS, loadRuns, saveRuns,
-  runSystemBench, runGameBench, listGameProcs, pmFind, pmVerify,
-  runGpuChild, GPU_BENCH_VER,
+  runSystemBench, runGameBench, listGameProcs, pmFind, pmVerify, pmCapture,
+  runGpuChild, gpuTestIsolated, GPU_BENCH_VER,
   isRunning: () => running || gameRunning,
 };

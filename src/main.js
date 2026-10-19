@@ -554,12 +554,22 @@ handle('bench:game', async (opt) => {
   // 렌더러 값은 범위를 제한해서 넘긴다 (빈 값이면 NaN 이 되어 진행률·시간 제한이 깨짐)
   const pid = clampInt(opt?.pid, 1, 2 ** 31, 0);
   if (!pid) throw new Error('측정할 게임을 선택하세요.');
-  const run = await bench.runGameBench({
-    pid, name: String(opt.name || 'game').slice(0, 80), label: benchLabel(opt.label),
-    seconds: clampInt(opt.seconds, 5, 600, 60), delay: clampInt(opt.delay, 0, 60, 10), progress: benchProgress,
-  });
-  addHistory('bench', `게임 FPS (${run.label}) ${run.app}: 평균 ${run.metrics.avgFps} · 1% Low ${run.metrics.low1}`);
-  return run;
+  const name = String(opt.name || 'game').slice(0, 80);
+  // 측정하는 동안 사용자는 게임 화면에 있으므로, 끝나면 작업 표시줄 아이콘을 깜빡여 알리고
+  // 실패 이유는 작업 기록에 남긴다 (알림은 몇 초 뒤 사라져 놓치기 쉽다)
+  try {
+    const run = await bench.runGameBench({
+      pid, name, label: benchLabel(opt.label),
+      seconds: clampInt(opt.seconds, 5, 600, 60), delay: clampInt(opt.delay, 0, 60, 10), progress: benchProgress,
+    });
+    addHistory('bench', `게임 FPS (${run.label}) ${run.app}: 평균 ${run.metrics.avgFps} · 1% Low ${run.metrics.low1}`);
+    return run;
+  } catch (e) {
+    addHistory('bench', `게임 FPS 측정 실패 (${name}): ${e.message}`);
+    throw e;
+  } finally {
+    if (win && !win.isDestroyed() && !win.isFocused()) win.flashFrame(true);
+  }
 });
 
 // ───────── 창 ─────────

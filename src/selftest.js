@@ -8,6 +8,7 @@ const os = require('os');
 const path = require('path');
 const { runPS, OP_READ } = require('./ps');
 const { arr } = require('./logic');
+const { frameStats } = require('./bench-stats');
 
 // 상태 비교에서 의미 있는 값만 남긴다 (서비스 실행 상태처럼 되돌리기 대상이 아닌 값은 제외)
 function essence(op, cur) {
@@ -135,6 +136,16 @@ async function finishRest(d, { say, section, fail, flush, outFile, t0, failures 
     if (!pm) say('  PresentMon.exe 없음 (첫 측정 때 내려받음)');
     else { await d.bench.pmVerify(pm); say('  ✔ PresentMon 서명 확인: ' + pm); }
   } catch (e) { fail('PresentMon: ' + e.message); }
+  // 게임 없이 측정 경로 전체(관리자 권한·ETW 기록·CSV 해석)를 확인: 그래픽 테스트 창을 PresentMon 으로 실제 측정한다.
+  // Chromium 은 창을 가진 프로세스가 아니라 별도 GPU 프로세스가 화면을 그리므로 실행 파일 이름으로 잡는다.
+  try {
+    say('  PresentMon 실측 중 (그래픽 테스트 창 약 15초)…');
+    const gpuDone = d.bench.gpuTestIsolated(12);
+    const parsed = await d.bench.pmCapture({ target: { name: path.basename(process.execPath) }, seconds: 5, delay: 5 });
+    const g = await gpuDone;
+    const st = frameStats(parsed.ft);
+    say(`  ✔ PresentMon 실측: 평균 ${st.avgFps} FPS · 1% Low ${st.low1} · ${st.frames}프레임 (그래픽 테스트 자체 측정 ${g.avgFps ?? '-'} FPS)`);
+  } catch (e) { fail('PresentMon 실측 실패 — 게임 FPS 측정도 같은 이유로 실패합니다: ' + e.message); }
   try {
     await new Promise((r) => { d.updater.init(() => {}); r(); });
     const st = await d.updater.check();

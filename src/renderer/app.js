@@ -941,7 +941,20 @@ $('#btnBenchGame').addEventListener('click', async () => {
   if (!sel.value) { await loadProcs(); if (!sel.value) return toast('게임을 먼저 실행한 뒤 새로고침을 눌러 선택하세요.', true); }
   const opt = sel.selectedOptions[0];
   const params = { pid: Number(sel.value), name: opt.dataset.name, seconds: Number($('#bgSec').value), delay: Number($('#bgDelay').value), label: $('#bgLabel').value };
-  const run = await withBenchBusy('FPS 측정 준비 중…', () => call('bench:game', params));
+  // 결과(성공·실패)를 카드에 계속 표시한다. 측정 중엔 게임 화면에 있어 몇 초짜리 알림은 놓치기 쉽다
+  const box = $('#gameResult');
+  let failMsg = null;
+  const run = await withBenchBusy('FPS 측정 준비 중…', async () => {
+    try { return await call('bench:game', params); } catch (e) { failMsg = e.message; throw e; }
+  });
+  box.classList.remove('hidden', 'ok', 'bad');
+  if (failMsg) {
+    box.classList.add('bad');
+    box.textContent = `✕ 마지막 측정 실패 (${new Date().toLocaleTimeString('ko-KR', { hour12: false })}): ${failMsg}`;
+  } else if (run) {
+    box.classList.add('ok');
+    box.textContent = `✓ ${run.app} — 평균 ${fmtNum(run.metrics.avgFps)} FPS · 1% Low ${fmtNum(run.metrics.low1)} · ${Number(run.frames).toLocaleString()}프레임 (아래 측정 기록·비교에 추가됨)`;
+  }
   if (run) {
     toast(`🎮 ${run.app} — 평균 ${fmtNum(run.metrics.avgFps)} FPS · 1% Low ${fmtNum(run.metrics.low1)}`);
     BMETA.presentmon = true;

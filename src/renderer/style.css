@@ -254,3 +254,6 @@ table.cmpt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .dupg label .t { color: var(--muted); flex: none; }
 #dupRoot { flex: 1; min-width: 200px; }
 .mb12 { margin-bottom: 12px; }
+.game-result { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; }
+.game-result.ok { background: rgba(var(--accent-rgb), .1); border: 1px solid rgba(var(--accent-rgb), .35); }
+.game-result.bad { background: rgba(255, 93, 108, .1); border: 1px solid rgba(255, 93, 108, .4); color: var(--danger); }
