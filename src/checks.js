@@ -469,7 +469,8 @@ try {
   $win = $env:WINDIR.ToLower()
   $tmp = @($env:TEMP.ToLower(), ($env:LOCALAPPDATA + '\Temp').ToLower(), ($env:WINDIR + '\Temp').ToLower())
   $bad = @(); $odd = @()
-  foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path })) {
+  # 포터블판 Oreum FPS Booster 자신은 임시 폴더에 풀려 실행되므로 제외
+  foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.ProcessName -ne 'Oreum FPS Booster' })) {
     $path = $p.Path.ToLower()
     if ($sys -contains $p.ProcessName.ToLower() -and -not $path.StartsWith($win)) { $bad += ($p.ProcessName + ' (' + $p.Path + ')') }
     elseif (@($tmp | Where-Object { $path.StartsWith($_) }).Count) { $odd += $p.ProcessName }

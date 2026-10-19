@@ -2,11 +2,14 @@
 function parseCsv(text, pid) {
   const lines = text.split(/\r?\n/).filter(Boolean);
   if (lines.length < 2) return null;
-  const head = lines[0].split(',');
-  const iFt = head.indexOf('MsBetweenPresents');
-  const iPid = head.indexOf('ProcessID');
-  const iSc = head.indexOf('SwapChainAddress');
-  const iApp = head.indexOf('Application');
+  // 열 이름은 대소문자를 구분하지 않고 찾는다. PresentMon 2.x 는 --v1_metrics 에서도
+  // 1.x 의 "MsBetweenPresents" 가 아니라 "msBetweenPresents" 를 써서, 정확히 일치로 찾으면 항상 0프레임이 됐다.
+  const head = lines[0].replace(/^﻿/, '').split(',').map((h) => h.trim().replace(/^"|"$/g, '').toLowerCase());
+  const col = (...names) => { for (const n of names) { const i = head.indexOf(n.toLowerCase()); if (i >= 0) return i; } return -1; };
+  const iFt = col('MsBetweenPresents', 'FrameTime', 'MsBetweenAppStart'); // 1.x 이름, 2.x(--v2_metrics) 이름 순
+  const iPid = col('ProcessID');
+  const iSc = col('SwapChainAddress');
+  const iApp = col('Application');
   if (iFt < 0) return null;
   // 스왑체인별로 모은 뒤 프레임이 가장 많은 것을 사용
   const chains = new Map();

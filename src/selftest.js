@@ -83,10 +83,15 @@ async function roundTrip(d, say, fail, outFile) {
     const ids = targets.map((t) => t.id);
     say(`  ${ids.length}개 항목 적용 중…`);
     const ap = await d.exclusive(() => d.applyTweaks(ids, { silent: true }));
-    ap.errors.forEach((e) => fail('적용 오류: ' + e));
+    // 프로그램(Discord 등)이 실행 중이라 안전하게 거부된 항목은 실패가 아니라 건너뜀으로 센다
+    const skipped = new Set();
+    ap.errors.forEach((e) => {
+      const t = targets.find((x) => e.startsWith(x.name + ':'));
+      if (t && /종료한 뒤 다시 적용/.test(e)) { skipped.add(t.id); say(`  ! 건너뜀: ${e}`); } else fail('적용 오류: ' + e);
+    });
     const st = await d.getStatus();
-    const notOn = targets.filter((t) => st[t.id]?.status !== 'on' && st[t.id]?.status !== 'na');
-    say(`  적용 후 상태: ${targets.length - notOn.length}/${targets.length}개 적용됨`);
+    const notOn = targets.filter((t) => !skipped.has(t.id) && st[t.id]?.status !== 'on' && st[t.id]?.status !== 'na');
+    say(`  적용 후 상태: ${targets.length - skipped.size - notOn.length}/${targets.length - skipped.size}개 적용됨${skipped.size ? ` (건너뜀 ${skipped.size}개)` : ''}`);
     notOn.forEach((t) => fail(`적용 후에도 "${t.name}" 상태가 ${st[t.id]?.status}`));
 
     say('  모두 되돌리는 중…');

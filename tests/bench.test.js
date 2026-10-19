@@ -17,6 +17,15 @@ test('parseCsv: 선택한 프로세스만, 프레임이 가장 많은 스왑체�
   assert.ok(r.ft.every((x) => x === 16.6));
 });
 
+test('parseCsv: PresentMon 2.x 열 이름(소문자 msBetweenPresents, FrameTime)도 해석 (실제 게임 PC 에서 0프레임이던 원인)', () => {
+  const v1 = 'Application,ProcessID,SwapChainAddress,PresentRuntime,msBetweenPresents\n' + Array(40).fill('game.exe,1,0xA,DXGI,8.3').join('\n');
+  assert.equal(parseCsv(v1, 1).ft.length, 40);
+  const v2 = '﻿"Application","ProcessId","SwapChainAddress","FrameTime"\n' + Array(35).fill('game.exe,1,0xA,4.2').join('\n');
+  const r = parseCsv(v2);
+  assert.equal(r.ft.length, 35);
+  assert.equal(r.ft[0], 4.2);
+});
+
 test('parseCsv: 헤더만 있거나 필요한 열이 없으면 null', () => {
   assert.equal(parseCsv(HEAD + '\n', 1), null);
   assert.equal(parseCsv('Application,ProcessID\nx,1\n', 1), null);
