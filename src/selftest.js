@@ -18,11 +18,13 @@ function essence(op, cur) {
     case 'power': return { guid: cur.guid ?? null };
     case 'pcfg': return { exists: !!cur.exists, scheme: cur.scheme ?? null, ac: cur.ac ?? null, dc: cur.dc ?? null };
     case 'key': return { exists: !!cur.exists, leaf: !!cur.leaf };
+    case 'dns': return { value: String(cur.value || '').split(/[,\s]+/).filter(Boolean).join(',') };
+    case 'json': return { file: !!cur.file, exists: !!cur.exists, value: cur.value ?? null };
     default: return cur;
   }
 }
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
-const describe = (op) => op.t === 'reg' ? `${op.path.replace('Registry::', '')}\\${op.name}` : op.t === 'svc' ? `서비스 ${op.name}` : op.t === 'pcfg' ? `전원 설정 ${op.set}` : op.t === 'key' ? op.path.replace('Registry::', '') : '전원 계획';
+const describe = (op) => op.t === 'dns' ? `DNS (${op.guid})` : op.t === 'json' ? `${op.path} → ${op.key}` : op.t === 'reg' ? `${op.path.replace('Registry::', '')}\\${op.name}` : op.t === 'svc' ? `서비스 ${op.name}` : op.t === 'pcfg' ? `전원 설정 ${op.set}` : op.t === 'key' ? op.path.replace('Registry::', '') : '전원 계획';
 
 async function readAll(tweaks, resolveOps) {
   const list = [];

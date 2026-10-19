@@ -4,11 +4,15 @@ const fs = require('fs');
 const os = require('os');
 const { runPS, OP_READ, OP_APPLY, OP_RESTORE } = require('./ps');
 const { arr, fmtMB, tweakStatus, driftIds, mergeOriginals, restoreOrder, createQueue } = require('./logic');
-const { CATEGORIES, TWEAKS, ACTIONS, reg } = require('./tweaks');
+const { CATEGORIES, TWEAKS, ACTIONS } = require('./tweaks');
+const { resolveDynamic } = require('./dynamic');
 const { CLEAN_GROUPS, CLEAN_ITEMS, CLEAN_LIB, CLEAN_SCAN, CLEAN_RUN, DRIVES } = require('./cleaner');
 const { CHECK_SCRIPT } = require('./checks');
 const { BLOAT, BLOAT_LIST, BLOAT_REMOVE } = require('./bloat');
-const { STARTUP_SRCS, STARTUP_LIST_SCRIPT, STARTUP_SET_SCRIPT } = require('./startup');
+const { STARTUP_SRCS, STARTUP_LIST_SCRIPT, STARTUP_SET_SCRIPT, TASKS_LIST_SCRIPT, TASK_SET_SCRIPT, SVC_LIST_SCRIPT, SVC_SET_SCRIPT } = require('./startup');
+const { profileOps, validateExe } = require('./profiles');
+const { DISPLAY_LIST, DISPLAY_SET } = require('./display');
+const { DUPES_SCAN, DUPES_DELETE, validateRoot, validateDelete } = require('./dupes');
 const monitor = require('./monitor');
 const bench = require('./bench');
 const updater = require('./updater');
@@ -41,6 +45,7 @@ const STATE_FILE = () => path.join(DIR(), 'backup.json');
 const SNAP_DIR = () => path.join(DIR(), 'backups');
 const HISTORY_FILE = () => path.join(DIR(), 'history.json');
 const SETTINGS_FILE = () => path.join(DIR(), 'settings.json');
+const STATS_FILE = () => path.join(DIR(), 'stats.json');
 
 // ───────── 저장소 ─────────
 function readJSON(file, def) {
@@ -58,6 +63,14 @@ function saveState(state, label) {
     writeJSON(path.join(SNAP_DIR(), `${stamp}_${label}.json`), state);
   }
 }
+// 대시보드 누적 통계: 확보한 용량, 최적화·청소 횟수, 마지막 시스템 검사 결과
+const loadStats = () => ({ freedBytes: 0, cleanRuns: 0, optimizeRuns: 0, lastCheck: null, ...readJSON(STATS_FILE(), {}) });
+function bumpStats(patch) {
+  const st = loadStats();
+  for (const [k, v] of Object.entries(patch)) st[k] = typeof v === 'number' ? Number(st[k] || 0) + v : v;
+  writeJSON(STATS_FILE(), st);
+  send('stats', st);
+}
 const loadSettings = () => ({ guard: true, autoUpdate: true, ...readJSON(SETTINGS_FILE(), {}) });
 
 function addHistory(type, text) {
@@ -70,29 +83,9 @@ function send(ch, data) {
   if (win && !win.isDestroyed()) win.webContents.send(ch, data);
 }
 
-let nagleCache = null;
+// 대상이 PC 마다 다른 항목(어댑터·장치 등)은 dynamic.js 에서 연산을 만든다. 이미 적용한 항목은 백업에 기록된 연산을 쓴다
 async function resolveOps(t) {
-  if (t.dynamic === 'nagle') {
-    if (!nagleCache) {
-      const r = await runPS(String.raw`
-$l = @()
-Get-ChildItem -LiteralPath 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces' | ForEach-Object {
-  $p = Get-ItemProperty -LiteralPath $_.PSPath
-  $ips = @()
-  if ($p.DhcpIPAddress) { $ips += $p.DhcpIPAddress }
-  if ($p.IPAddress) { $ips += @($p.IPAddress) }
-  if (@($ips | Where-Object { $_ -and $_ -ne '0.0.0.0' }).Count -gt 0) { $l += $_.Name }
-}
-Emit @{ list = $l }
-`);
-      nagleCache = arr(r.list);
-    }
-    return nagleCache.flatMap((k) => [
-      reg('Registry::' + k, 'TcpAckFrequency', 'DWord', 1),
-      reg('Registry::' + k, 'TCPNoDelay', 'DWord', 1),
-    ]);
-  }
-  return t.ops;
+  return t.dynamic ? resolveDynamic(t, loadState().tweaks[t.id]) : t.ops;
 }
 
 // ───────── 최적화 적용/복원 ─────────
@@ -146,6 +139,7 @@ async function applyTweaks(ids, { silent = false } = {}) {
     applied.push(t.id);
   }
   saveState(state, 'apply');
+  if (!silent) bumpStats({ optimizeRuns: 1 });
   if (!silent) addHistory('optimize', `최적화 ${applied.length}개 적용` + (applied.length <= 3 ? ` (${plan.map((p) => p.t.name).join(', ')})` : ''));
   return {
     applied, errors,
@@ -316,7 +310,16 @@ handle('sysinfo', () => runPS(SYSINFO_SCRIPT));
 handle('status', () => getStatus());
 handle('apply', (ids) => exclusive(() => applyTweaks(arr(ids))));
 handle('revert', (ids) => exclusive(() => revertTweaks(arr(ids))));
-handle('revertAll', () => exclusive(() => revertTweaks(Object.keys(loadState().tweaks))));
+handle('revertAll', () => exclusive(async () => {
+  const r = await revertTweaks(Object.keys(loadState().tweaks));
+  // 게임 프로필도 함께 원래대로
+  for (const p of Object.keys(loadState().profiles || {})) {
+    const pr = await removeProfile(p);
+    r.errors.push(...pr.errors);
+    if (!pr.errors.length) r.reverted.push('profile:' + p);
+  }
+  return r;
+}));
 handle('action', async (id) => {
   const s = ACTION_SCRIPTS[id];
   if (!s) throw new Error('알 수 없는 작업');
@@ -331,15 +334,43 @@ handle('clean:run', async (ids) => {
   const res = arr((await runPS(CLEAN_LIB + CLEAN_RUN, { items }, { timeout: 20 * 60 * 1000 })).results);
   const freed = res.reduce((s, r) => s + Number(r.freed || 0), 0);
   const count = res.reduce((s, r) => s + Number(r.count || 0), 0);
+  bumpStats({ freedBytes: freed, cleanRuns: 1 });
   addHistory('clean', `파일 청소: ${count.toLocaleString()}개, ${fmtMB(freed)} 확보`);
   return { results: res, freed, count };
 });
 handle('drives', async () => arr((await runPS(DRIVES)).drives));
+handle('stats', () => loadStats());
+
+// ───────── 중복 파일 찾기 ─────────
+let dupGroups = []; // 마지막 검색 결과. 지울 때 이 안에 있는 파일인지, 묶음마다 하나는 남는지 확인한다
+handle('dupes:pick', async () => {
+  const r = await dialog.showOpenDialog(win, { title: '중복 파일을 찾을 폴더', properties: ['openDirectory'] });
+  return r.canceled ? null : r.filePaths[0];
+});
+handle('dupes:scan', async (root, minSize) => {
+  const bad = validateRoot(String(root || ''));
+  if (bad) throw new Error(bad);
+  const r = await runPS(DUPES_SCAN, { root: String(root), minSize: Math.max(1024, Number(minSize) || 1048576) }, { timeout: 30 * 60 * 1000 });
+  dupGroups = arr(r.groups).map((g) => ({ ...g, files: arr(g.files) }));
+  return { scanned: r.scanned, groups: dupGroups };
+});
+handle('dupes:delete', async (paths) => {
+  const list = arr(paths).map(String);
+  const bad = validateDelete(dupGroups, list);
+  if (bad) throw new Error(bad);
+  const res = arr((await runPS(DUPES_DELETE, { paths: list })).results);
+  const freed = res.reduce((a, x) => a + (x.ok ? Number(x.size || 0) : 0), 0);
+  const okSet = new Set(res.filter((x) => x.ok).map((x) => x.path.toLowerCase()));
+  dupGroups = dupGroups.map((g) => ({ ...g, files: g.files.filter((f) => !okSet.has(f.path.toLowerCase())) })).filter((g) => g.files.length > 1);
+  if (freed) { bumpStats({ freedBytes: freed }); addHistory('clean', `중복 파일 ${okSet.size}개 휴지통으로 이동, ${fmtMB(freed)} 확보`); }
+  return { results: res, freed, groups: dupGroups };
+});
 
 handle('check:run', async () => {
   const res = arr((await runPS(CHECK_SCRIPT, {}, { timeout: 5 * 60 * 1000 })).results);
   const c = { ok: 0, warn: 0, bad: 0, info: 0 };
   res.forEach((r) => { c[r.status] = (c[r.status] || 0) + 1; });
+  bumpStats({ lastCheck: { ...c, at: new Date().toISOString() } });
   addHistory('check', `시스템 검사: 정상 ${c.ok} · 주의 ${c.warn} · 위험 ${c.bad}`);
   return res;
 });
@@ -353,13 +384,37 @@ handle('bloat:remove', async (fulls) => {
   return res;
 });
 
-handle('startup:list', async () => arr((await runPS(STARTUP_LIST_SCRIPT, { srcs: STARTUP_SRCS })).items));
+// 레지스트리 Run·시작 폴더 + 로그온/부팅 예약 작업 + 타사 자동 시작 서비스
+handle('startup:list', async () => {
+  const known = Object.keys(loadState().startupServices || {}); // 이 프로그램이 "수동"으로 바꾼 서비스도 계속 보여 준다
+  const [a, b, c] = await Promise.all([
+    runPS(STARTUP_LIST_SCRIPT, { srcs: STARTUP_SRCS }),
+    runPS(TASKS_LIST_SCRIPT).catch(() => ({ items: [] })),
+    runPS(SVC_LIST_SCRIPT, { known }).catch(() => ({ items: [] })),
+  ]);
+  return [...arr(a.items), ...arr(b.items), ...arr(c.items)];
+});
 handle('startup:set', async (item, enabled) => {
-  // 렌더러가 넘긴 경로를 그대로 쓰지 않고, 알려진 위치에서만 고른다
-  const src = STARTUP_SRCS.find((x) => x.src === item?.src);
-  if (!src || !item.name) throw new Error('알 수 없는 시작 프로그램');
-  await runPS(STARTUP_SET_SCRIPT, { ap: src.ap, name: String(item.name), enabled: !!enabled });
-  addHistory('startup', `시작 프로그램 "${item.name}" ${enabled ? '켜기' : '끄기'}`);
+  const name = String(item?.name || '');
+  if (!name) throw new Error('알 수 없는 시작 프로그램');
+  if (item.src === 'TASK') {
+    await runPS(TASK_SET_SCRIPT, { path: String(item.path || '\\'), name, enabled: !!enabled });
+  } else if (item.src === 'SVC') {
+    // 끌 때 원래 시작 유형을 기록해 두었다가, 켤 때 그대로 되돌린다
+    const state = loadState();
+    state.startupServices = state.startupServices || {};
+    const orig = state.startupServices[name] || { start: 2, delayed: 0 };
+    const r = await runPS(SVC_SET_SCRIPT, { name, enabled: !!enabled, start: orig.start, delayed: orig.delayed });
+    if (!enabled) { if (!state.startupServices[name]) state.startupServices[name] = { start: Number(r.before?.start ?? 2), delayed: Number(r.before?.delayed ?? 0) }; }
+    else delete state.startupServices[name];
+    saveState(state);
+  } else {
+    // 렌더러가 넘긴 경로를 그대로 쓰지 않고, 알려진 위치에서만 고른다
+    const src = STARTUP_SRCS.find((x) => x.src === item?.src);
+    if (!src) throw new Error('알 수 없는 시작 프로그램');
+    await runPS(STARTUP_SET_SCRIPT, { ap: src.ap, name, enabled: !!enabled });
+  }
+  addHistory('startup', `시작 프로그램 "${item.display || name}" ${enabled ? '켜기' : '끄기'}`);
   return true;
 });
 
@@ -371,6 +426,7 @@ handle('settings:set', (patch) => {
   const s = loadSettings();
   if (patch && typeof patch.guard === 'boolean') s.guard = patch.guard;
   if (patch && typeof patch.autoUpdate === 'boolean') s.autoUpdate = patch.autoUpdate;
+  if (patch && ['', 'midnight', 'graphite', 'light'].includes(patch.theme)) s.theme = patch.theme;
   writeJSON(SETTINGS_FILE(), s);
   return s;
 });
@@ -393,6 +449,87 @@ handle('confirm', async (msg) => {
   return r.response === 0;
 });
 handle('reboot', () => runPS('shutdown /r /t 5 /c "Oreum FPS Booster: 설정 적용을 위해 재부팅합니다."\nEmit @{ ok = $true }'));
+
+// ───────── 게임 프로필 (게임별 고성능 GPU + CPU 우선순위 높음) ─────────
+async function removeProfile(exePath) {
+  const state = loadState();
+  const p = state.profiles?.[exePath];
+  if (!p) return { errors: [] };
+  const items = [...p.originals].reverse();
+  const res = arr((await runPS(OP_RESTORE, { items })).results);
+  const errors = res.filter((x) => !x.ok).map((x) => x.err);
+  if (!errors.length) { delete state.profiles[exePath]; saveState(state, 'restore'); }
+  return { errors };
+}
+handle('profile:list', async () => {
+  const profiles = loadState().profiles || {};
+  const paths = Object.keys(profiles);
+  if (!paths.length) return [];
+  const ops = paths.flatMap((p) => profileOps(p));
+  const res = arr((await runPS(OP_READ, { ops })).results);
+  return paths.map((p, i) => ({
+    path: p, name: profiles[p].name, addedAt: profiles[p].addedAt,
+    status: tweakStatus(ops.slice(i * 2, i * 2 + 2), res.slice(i * 2, i * 2 + 2)),
+    exists: fs.existsSync(p),
+  }));
+});
+handle('profile:add', async () => {
+  const pick = await dialog.showOpenDialog(win, { title: '게임 실행 파일 선택', properties: ['openFile'], filters: [{ name: '실행 파일', extensions: ['exe'] }] });
+  if (pick.canceled || !pick.filePaths[0]) return null;
+  const exePath = pick.filePaths[0];
+  return exclusive(async () => {
+    const state = loadState();
+    const bad = validateExe(exePath, state.profiles);
+    if (bad) throw new Error(bad);
+    const ops = profileOps(exePath);
+    const res = arr((await runPS(OP_APPLY, { ops })).results);
+    const errors = res.filter((x) => !x.ok).map((x) => x.err);
+    state.profiles = state.profiles || {};
+    state.profiles[exePath] = { name: path.win32.basename(exePath), addedAt: new Date().toISOString(), originals: ops.map((op, i) => ({ op, before: res[i]?.before ?? null })) };
+    saveState(state, 'apply');
+    addHistory('optimize', `게임 프로필 추가: ${path.win32.basename(exePath)} (고성능 GPU · CPU 우선순위 높음)`);
+    return { path: exePath, errors };
+  });
+});
+handle('profile:remove', (exePath) => exclusive(async () => {
+  const r = await removeProfile(String(exePath));
+  if (!r.errors.length) addHistory('restore', `게임 프로필 제거: ${path.win32.basename(String(exePath))}`);
+  return r;
+}));
+
+// ───────── 모니터 최대 주사율 ─────────
+// 바꾼 뒤 확인 창을 띄우고, KEEP_SEC 초 안에 "유지"를 누르지 않으면 창을 닫고 원래대로 되돌린다
+// (화면이 안 나와 확인 창이 보이지 않아도 자동으로 복구되도록 메인 프로세스에서 처리)
+const KEEP_SEC = 15;
+let displayBusy = false;
+handle('display:list', async () => arr((await runPS(DISPLAY_LIST)).list));
+handle('display:max', async () => {
+  if (displayBusy) throw new Error('이전 변경을 확인하는 중입니다.');
+  displayBusy = true;
+  try {
+    const list = arr((await runPS(DISPLAY_LIST)).list);
+    const targets = list.filter((d) => Number(d.max) > Number(d.current));
+    if (!targets.length) return { changed: [], list };
+    const res = arr((await runPS(DISPLAY_SET, { items: targets.map((d) => ({ device: d.device, hz: d.max })) })).results);
+    const changed = targets.filter((d, i) => res[i]?.ok);
+    const errors = res.filter((x) => !x.ok).map((x) => x.err);
+    if (!changed.length) return { changed, errors };
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort(), KEEP_SEC * 1000);
+    const desc = changed.map((d) => `${d.name}: ${d.current}Hz → ${d.max}Hz`).join('\n');
+    let keep = false;
+    try {
+      const r = await dialog.showMessageBox(win, {
+        type: 'question', buttons: ['유지', '되돌리기'], defaultId: 0, cancelId: 1, title: 'Oreum FPS Booster', signal: ac.signal,
+        message: `모니터 주사율을 바꿨습니다.\n${desc}\n\n화면이 정상으로 보이면 [유지]를 누르세요. ${KEEP_SEC}초 안에 누르지 않으면 원래대로 돌아갑니다.`,
+      });
+      keep = !ac.signal.aborted && r.response === 0;
+    } finally { clearTimeout(timer); }
+    if (!keep) await runPS(DISPLAY_SET, { items: changed.map((d) => ({ device: d.device, hz: d.current })) });
+    else addHistory('optimize', `모니터 주사율 변경: ${changed.map((d) => `${d.current}→${d.max}Hz`).join(', ')}`);
+    return { changed, errors, kept: keep, timedOut: ac.signal.aborted };
+  } finally { displayBusy = false; }
+});
 
 // ───────── 전/후 비교 ─────────
 const monBuf = [];
@@ -440,6 +577,8 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
+      // 스모크 테스트 화면 캡처 때는 창이 가려져 있어도 그려지도록 화면 밖 렌더링
+      offscreen: SMOKE && !!process.env.OFB_SMOKE_SHOTS,
     },
   });
   // 외부 페이지로 이동하거나 새 창을 여는 것을 막는다
@@ -484,11 +623,18 @@ async function runSmoke() {
   try {
     const ready = 'typeof META !== "undefined" && !!META && document.getElementById("busy").classList.contains("hidden")';
     for (let i = 0; i < 120 && !(await js(ready)); i++) await wait(500);
+    // OFB_SMOKE_SHOTS=폴더 를 주면 페이지마다 화면을 캡처한다 (레이아웃 눈으로 확인용)
+    const shots = process.env.OFB_SMOKE_SHOTS;
+    const shot = async (name) => { if (!shots) return; await wait(300); const img = await win.webContents.capturePage(); fs.writeFileSync(path.join(shots, name + '.png'), img.toPNG()); };
     for (const p of ['optimize', 'bench', 'cleaner', 'check', 'startup', 'bloat', 'personal', 'backup', 'history', 'dash']) {
       await js(`goto('${p}')`);
-      await wait(p === 'bloat' || p === 'startup' ? 6000 : 800);
+      await wait(p === 'bloat' || p === 'startup' ? 8000 : 1200);
+      await shot(p);
     }
     await wait(3000);
+    await shot('dash2');
+    if (shots) for (const th of ['light', 'midnight']) { await js(`applyTheme('${th}'); paintTiles();`); await wait(600); await shot('theme-' + th); }
+    await js("applyTheme('')");
     report = await js(`({
       version: META.version,
       tweakCards: document.querySelectorAll('#optList .item').length,
@@ -502,6 +648,11 @@ async function runSmoke() {
       sysCpu: document.getElementById('sCpu').innerText,
       score: document.getElementById('scoreText').innerText,
       benchText: document.getElementById('benchRuns').innerText.slice(0, 60),
+      profileText: document.getElementById('profileList').innerText.slice(0, 60),
+      stats: [document.getElementById('stFreed').innerText, document.getElementById('stOpt').innerText, document.getElementById('stHealthTxt').innerText],
+      tempTile: !document.querySelector('#monitor .tile[data-m=temp]').classList.contains('hidden') ? document.querySelector('#monitor .tile[data-m=temp] .v').innerText : 'hidden',
+      tweakCount: META.tweaks.filter((t) => t.cat !== 'personal').length,
+      startupLabels2: [...new Set([...document.querySelectorAll('#startupList .badge')].map((b) => b.textContent))],
       toastErr: document.getElementById('toast').classList.contains('err') && !document.getElementById('toast').classList.contains('hidden') ? document.getElementById('toast').innerText : '',
     })`);
   } catch (e) {

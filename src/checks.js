@@ -185,7 +185,7 @@ try {
     else { Add '그래픽·게임' '그래픽 드라이버' 'ok' $txt '' $null }
     $cur = [int]$vc.CurrentRefreshRate; $max = [int]$vc.MaxRefreshRate
     if ($cur -gt 0) {
-      if ($max -gt $cur -and $cur -le 60) { Add '그래픽·게임' '모니터 주사율' 'warn' ($cur.ToString() + 'Hz (최대 ' + $max + 'Hz)') '모니터가 더 높은 주사율을 지원하는데 60Hz로 설정되어 있을 수 있습니다. 설정 > 디스플레이 > 고급 디스플레이에서 확인하세요.' $null }
+      if ($max -gt $cur -and $cur -le 60) { Add '그래픽·게임' '모니터 주사율' 'warn' ($cur.ToString() + 'Hz (최대 ' + $max + 'Hz)') '모니터가 더 높은 주사율을 지원하는데 60Hz로 설정되어 있을 수 있습니다. 해결을 누르면 최대 주사율로 바꿉니다.' (Fx 'action' 'maxRefresh') }
       else { Add '그래픽·게임' '모니터 주사율' 'ok' ($cur.ToString() + 'Hz') '' $null }
     }
   }
@@ -425,6 +425,58 @@ try {
     if ($age -gt 14) { Add '보안' '마지막 바이러스 검사' 'info' ($age.ToString() + '일 전') '2주 넘게 검사하지 않았습니다. Windows 보안에서 빠른 검사를 한 번 실행하세요.' $null }
     else { Add '보안' '마지막 바이러스 검사' 'ok' ($age.ToString() + '일 전') '' $null }
   }
+} catch {}
+
+# ───── 추가 검사: 입력·전원 모드 ─────
+try {
+  $fk = RG 'Registry::HKEY_CURRENT_USER\Control Panel\Accessibility\Keyboard Response' 'Flags'
+  if ($fk.exists -and (([int]$fk.value) -band 1)) { Add '그래픽·게임' '필터 키' 'warn' '켜짐' '필터 키가 켜져 있으면 짧게 누른 키가 무시되거나 늦게 인식됩니다. 설정 > 접근성 > 키보드에서 필터 키를 끄세요.' $null }
+  else { Add '그래픽·게임' '필터 키' 'ok' '꺼짐' '' $null }
+} catch {}
+
+try {
+  # Windows 11 전원 모드 (설정 > 시스템 > 전원): 최고의 전원 효율 = 961cc777-…
+  $ov = RG 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\Power\User\PowerSchemes' 'ActiveOverlayAcPowerScheme'
+  if ($ov.exists -and [string]$ov.value -match '961cc777-2547-4f9d-8174-7d86181b8a7a') { Add '그래픽·게임' 'Windows 전원 모드' 'warn' '최고의 전원 효율' '전원 모드가 절전 쪽으로 설정돼 CPU 성능이 제한됩니다. 설정 > 시스템 > 전원에서 "최고의 성능"으로 바꾸세요.' $null }
+  elseif ($ov.exists) { Add '그래픽·게임' 'Windows 전원 모드' 'ok' (@{ 'ded574b5-45a0-4f42-8737-46345c09c238' = '최고의 성능' }[[string]$ov.value] + '') '' $null }
+} catch {}
+
+try {
+  # 메모리 무결성: 설정값과 실제 동작이 다르면 재부팅해야 반영된다
+  $set = RG 'Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\DeviceGuard\Scenarios\HypervisorEnforcedCodeIntegrity' 'Enabled'
+  $dg2 = Get-CimInstance -Namespace 'root\Microsoft\Windows\DeviceGuard' -ClassName Win32_DeviceGuard -ErrorAction Stop
+  $running = @($dg2.SecurityServicesRunning) -contains 2
+  if ($set.exists -and ([int]$set.value -eq 1) -ne $running) {
+    $txt = '꺼짐 예정'; if ([int]$set.value -eq 1) { $txt = '켜짐 예정' }
+    Add '그래픽·게임' '메모리 무결성 변경 대기' 'info' ($txt + ' (재부팅 필요)') '메모리 무결성 설정을 바꿨지만 아직 재부팅하지 않아 반영되지 않았습니다.' $null
+  }
+} catch {}
+
+# ───── 추가 검사: 보안 (실행 가로채기·의심 프로세스) ─────
+try {
+  # 정상 프로그램 실행을 다른 프로그램으로 가로채는 IFEO Debugger 값 (악성 프로그램이 자주 쓰는 수법)
+  $ifeo = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Image File Execution Options'
+  $hij = @(Get-ChildItem -LiteralPath $ifeo -ErrorAction SilentlyContinue | ForEach-Object {
+    $d = RG $_.PSPath 'Debugger'
+    if ($d.exists -and [string]$d.value) { $_.PSChildName + ' → ' + [string]$d.value }
+  })
+  if ($hij.Count) { Add '보안' '프로그램 실행 가로채기 (IFEO)' 'warn' (($hij | Select-Object -First 3) -join ', ') '다른 프로그램이 실행을 가로채도록 설정돼 있습니다. Process Explorer 처럼 직접 설치한 도구가 아니라면 악성 프로그램일 수 있으니 백신으로 검사하세요.' $null }
+  else { Add '보안' '프로그램 실행 가로채기 (IFEO)' 'ok' '없음' '' $null }
+} catch {}
+
+try {
+  $sys = @('svchost', 'csrss', 'lsass', 'winlogon', 'services', 'smss', 'wininit', 'explorer', 'dwm', 'spoolsv', 'taskhostw', 'conhost')
+  $win = $env:WINDIR.ToLower()
+  $tmp = @($env:TEMP.ToLower(), ($env:LOCALAPPDATA + '\Temp').ToLower(), ($env:WINDIR + '\Temp').ToLower())
+  $bad = @(); $odd = @()
+  foreach ($p in @(Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.Path })) {
+    $path = $p.Path.ToLower()
+    if ($sys -contains $p.ProcessName.ToLower() -and -not $path.StartsWith($win)) { $bad += ($p.ProcessName + ' (' + $p.Path + ')') }
+    elseif (@($tmp | Where-Object { $path.StartsWith($_) }).Count) { $odd += $p.ProcessName }
+  }
+  if ($bad.Count) { Add '보안' '의심스러운 프로세스' 'bad' ($bad -join ', ') 'Windows 시스템 프로그램과 이름이 같지만 다른 위치에서 실행 중입니다. 악성 프로그램일 가능성이 높으니 즉시 백신으로 정밀 검사하세요.' $null }
+  elseif ($odd.Count) { Add '보안' '의심스러운 프로세스' 'info' ('임시 폴더에서 실행 중: ' + ((@($odd | Select-Object -Unique)) -join ', ')) '설치 프로그램이 실행 중이 아니라면, 임시 폴더에서 계속 실행되는 프로그램은 확인해 보는 것이 좋습니다.' $null }
+  else { Add '보안' '의심스러운 프로세스' 'ok' '없음' '' $null }
 } catch {}
 
 # ───── 추가 검사: 네트워크 ─────

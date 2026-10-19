@@ -6,8 +6,25 @@ const os = require('os');
 const LOOP = String.raw`
 [Console]::OutputEncoding = [Text.Encoding]::UTF8
 $ErrorActionPreference = 'SilentlyContinue'
+# 온도: NVIDIA 는 드라이버에 포함된 nvidia-smi, CPU 는 ACPI 센서(관리자 권한·메인보드 지원 시). 무거우므로 4번에 한 번만 읽는다
+$smi = (Get-Command nvidia-smi.exe -ErrorAction SilentlyContinue).Source
+if (-not $smi -and (Test-Path -LiteralPath ($env:ProgramFiles + '\NVIDIA Corporation\NVSMI\nvidia-smi.exe'))) { $smi = $env:ProgramFiles + '\NVIDIA Corporation\NVSMI\nvidia-smi.exe' }
+$tick = 0; $gpuT = $null; $cpuT = $null
 while ($true) {
   $o = @{}
+  if (($tick % 4) -eq 0) {
+    $gpuT = $null; $cpuT = $null
+    # 노트북이 배터리로 동작 중이면 nvidia-smi 를 부르지 않는다 (쉬고 있는 외장 GPU 를 깨워 배터리를 쓰게 됨)
+    $onBattery = @(Get-CimInstance Win32_Battery | Where-Object { $_.BatteryStatus -eq 1 }).Count -gt 0
+    if ($smi -and -not $onBattery) { $t = (& $smi --query-gpu=temperature.gpu --format=csv,noheader,nounits 2>$null | Select-Object -First 1); if ([string]$t -match '^\s*(\d+)') { $gpuT = [int]$matches[1] } }
+    $z = @(Get-CimInstance -Namespace 'root/wmi' -ClassName MSAcpi_ThermalZoneTemperature | ForEach-Object { [math]::Round($_.CurrentTemperature / 10 - 273.15) })
+    # 센서가 없는 PC 는 고정된 엉터리 값(예: 27.8°C)을 주므로 그럴듯한 범위만 쓴다
+    $v = @($z | Where-Object { $_ -ge 30 -and $_ -le 110 })
+    if ($v.Count) { $cpuT = [int](($v | Measure-Object -Maximum).Maximum) }
+  }
+  $tick++
+  if ($gpuT -ne $null) { $o.gpuTemp = $gpuT }
+  if ($cpuT -ne $null) { $o.cpuTemp = $cpuT }
   $c = Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor -Filter "Name='_Total'"
   if ($c) { $o.cpu = [int]$c.PercentProcessorTime }
   $d = Get-CimInstance Win32_PerfFormattedData_PerfDisk_PhysicalDisk -Filter "Name='_Total'"

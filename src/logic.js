@@ -12,6 +12,9 @@ function normVal(kind, v) {
   return String(v);
 }
 
+// 레지스트리 NameServer 값("1.1.1.1,1.0.0.1" 또는 공백 구분) → 배열
+const dnsList = (v) => String(v || '').split(/[,\s]+/).filter(Boolean);
+
 const POWER_RX = /Oreum FPS Ultimate|8c5e7fda-e8bf-4a96-9a85-a6e23a8c635c|e9a42b02-d5df-448d-aa00-03f14749eb61/i;
 
 function opMatches(op, cur) {
@@ -22,6 +25,8 @@ function opMatches(op, cur) {
     case 'power': return POWER_RX.test(cur.line || '');
     case 'pcfg': return !!cur.exists && Number(cur.ac) === op.value;
     case 'key': return !!cur.leaf;
+    case 'dns': return dnsList(cur.value).join(',') === [].concat(op.servers).join(',');
+    case 'json': return !!cur.exists && JSON.stringify(cur.value) === JSON.stringify(op.value);
     default: return false;
   }
 }
@@ -70,4 +75,4 @@ function createQueue() {
   };
 }
 
-module.exports = { arr, fmtMB, normVal, opMatches, tweakStatus, driftIds, mergeOriginals, restoreOrder, createQueue, POWER_RX };
+module.exports = { dnsList, arr, fmtMB, normVal, opMatches, tweakStatus, driftIds, mergeOriginals, restoreOrder, createQueue, POWER_RX };

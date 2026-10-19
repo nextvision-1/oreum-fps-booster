@@ -66,6 +66,7 @@ function goto(page) {
   if (page === 'cleaner') loadDrives();
   if (page === 'history') loadHistory();
   if (page === 'bench') loadBench();
+  if (page === 'optimize') loadProfiles();
 }
 $('#nav').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-page]');
@@ -162,6 +163,8 @@ function paintStatus() {
   const pct = total ? Math.round((on / total) * 100) : 0;
   $('#ring').style.setProperty('--p', pct);
   $('#scoreNum').textContent = pct;
+  LAST_PCT = pct;
+  paintHealth();
   $('#scoreText').textContent = pct >= 100
     ? `권장 최적화 ${total}개가 모두 적용되어 있습니다.`
     : `권장 최적화 ${total}개 중 ${on}개 적용됨 — 원클릭으로 나머지를 적용하세요.`;
@@ -211,8 +214,53 @@ async function toggleTweak(t, checked, input) {
   await refreshStatus();
 }
 
+// ───────── 모니터 최대 주사율 ─────────
+// 확인 창과 15초 자동 복구는 메인 프로세스가 처리한다 (화면이 안 나와도 되돌아가도록)
+async function maxRefresh() {
+  const r = await withBusy('모니터 주사율 확인 중…', () => call('display:max'));
+  if (!r) return false;
+  if (r.errors?.length) toast('일부 모니터 변경 실패: ' + r.errors[0], true);
+  if (!r.changed.length) { if (!r.errors?.length) toast('모든 모니터가 이미 지원하는 최고 주사율입니다.'); return true; }
+  const desc = r.changed.map((d) => `${d.current}→${d.max}Hz`).join(', ');
+  if (r.kept) toast(`🖥 모니터 주사율을 바꿨습니다 (${desc})`);
+  else toast(r.timedOut ? '확인이 없어 원래 주사율로 되돌렸습니다.' : '원래 주사율로 되돌렸습니다.');
+  return true;
+}
+
+// ───────── 게임 프로필 ─────────
+async function loadProfiles() {
+  const box = $('#profileList');
+  try {
+    const list = await call('profile:list');
+    box.innerHTML = list.length ? '' : '<div class="empty">추가한 게임이 없습니다. "게임 추가"로 게임 실행 파일(.exe)을 고르세요.</div>';
+    for (const p of list) {
+      const el = document.createElement('div');
+      el.className = 'card item';
+      const st = p.status === 'on' ? '<span class="badge st on">적용됨</span>' : '<span class="badge st partial">일부 적용</span>';
+      el.innerHTML = `<div class="body"><div class="title">${esc(p.name)} ${st}${p.exists ? '' : ' <span class="badge">파일 없음</span>'}</div><div class="cmd" title="${esc(p.path)}">${esc(p.path)}</div></div><button class="btn small ghost">제거</button>`;
+      $('button', el).addEventListener('click', async () => {
+        await withBusy('게임 프로필 제거 중…', async () => {
+          const r = await call('profile:remove', p.path);
+          toast(r.errors.length ? '일부 오류: ' + r.errors[0] : `↩ ${p.name} 프로필을 제거했습니다.`, r.errors.length > 0);
+        });
+        loadProfiles();
+      });
+      box.appendChild(el);
+    }
+  } catch (e) { box.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+}
+$('#btnProfileAdd').addEventListener('click', async () => {
+  try {
+    const r = await call('profile:add');
+    if (!r) return; // 선택 취소
+    toast(r.errors.length ? '일부 적용 실패 (관리자 권한 필요): ' + r.errors[0] : `🎮 ${r.path.split('\\').pop()} — 고성능 GPU · CPU 우선순위 높음 적용 (게임을 다시 켜면 반영)`, r.errors.length > 0);
+  } catch (e) { toast(e.message, true); }
+  loadProfiles();
+});
+
 // ───────── 원클릭 / 전체 복원 ─────────
 async function runAction(id, silent = false) {
+  if (id === 'maxRefresh') return maxRefresh();
   const a = META.actions.find((x) => x.id === id);
   const long = id === 'sfc' || id === 'dism';
   return withBusy(`${a?.name || id} 실행 중…${long ? '\n(오래 걸릴 수 있습니다. 창을 닫지 마세요)' : ''}`, async () => {
@@ -224,10 +272,12 @@ async function runAction(id, silent = false) {
   });
 }
 
-async function boost() {
-  const ids = META.tweaks.filter((t) => t.recommended && STATUS[t.id]?.status !== 'on' && STATUS[t.id]?.status !== 'na').map((t) => t.id);
-  if (!ids.length) return toast('권장 최적화가 이미 모두 적용되어 있습니다.');
-  const names = META.tweaks.filter((t) => ids.includes(t.id)).map((t) => '• ' + t.name).join('\n');
+// mode: 'recommended' (권장 항목만) | 'nohigh' (성능 항목 중 위험 등급 제외 전체)
+async function boost(mode = 'recommended') {
+  const pick = mode === 'nohigh' ? (t) => OPT_CATS.includes(t.cat) && t.risk !== 'high' : (t) => t.recommended;
+  const ids = META.tweaks.filter((t) => pick(t) && STATUS[t.id]?.status !== 'on' && STATUS[t.id]?.status !== 'na').map((t) => t.id);
+  if (!ids.length) return toast(mode === 'nohigh' ? '위험 등급을 뺀 최적화가 이미 모두 적용되어 있습니다.' : '권장 최적화가 이미 모두 적용되어 있습니다.');
+  const names = META.tweaks.filter((t) => ids.includes(t.id)).map((t) => '• ' + t.name + (t.risk === 'mid' ? '  [주의]' : '')).join('\n');
   if (!(await call('confirm', `다음 ${ids.length}개 항목을 적용합니다.\n\n${names}\n\n변경 전 값은 자동 백업됩니다.`))) return;
   if ($('#chkRP').checked) {
     const ok = await runAction('restorePoint', true);
@@ -254,8 +304,23 @@ async function boost() {
     }
   }
 }
-$('#btnBoost').addEventListener('click', boost);
-$('#btnBoost2').addEventListener('click', boost);
+$('#btnBoost').addEventListener('click', () => boost('recommended'));
+$('#btnBoost2').addEventListener('click', () => boost('recommended'));
+$('#btnBoostNoHigh').addEventListener('click', () => boost('nohigh'));
+
+// 적용된 "위험" 등급 항목만 되돌리기 (메모리 무결성 끄기 등)
+$('#btnRevertHigh').addEventListener('click', async () => {
+  const ids = META.tweaks.filter((t) => t.risk === 'high' && STATUS[t.id]?.backedUp).map((t) => t.id);
+  if (!ids.length) return toast('이 프로그램으로 적용한 위험 등급 항목이 없습니다.');
+  const names = META.tweaks.filter((t) => ids.includes(t.id)).map((t) => '• ' + t.name).join('\n');
+  if (!(await call('confirm', `다음 위험 등급 항목을 원래대로 되돌립니다.\n\n${names}`))) return;
+  await withBusy('위험 항목 되돌리는 중…', async () => {
+    const r = await call('revert', ids);
+    toast(r.errors.length ? '일부 오류: ' + r.errors[0] : `↩ 위험 항목 ${r.reverted.length}개를 원래대로 되돌렸습니다.`, r.errors.length > 0);
+    if (r.reverted.length) $('#rebootBar').classList.remove('hidden');
+  });
+  await refreshStatus();
+});
 
 async function revertAll() {
   if (!(await call('confirm', '이 프로그램이 변경한 모든 설정을 원래 값으로 되돌릴까요?'))) return;
@@ -280,7 +345,7 @@ document.addEventListener('click', (e) => {
 
 // ───────── 실시간 모니터 ─────────
 const HIST_N = 60;
-const series = { cpu: [], gpu: [], mem: [], disk: [], net: [] };
+const series = { cpu: [], gpu: [], mem: [], disk: [], net: [], temp: [] };
 function push(k, v) {
   series[k].push(v);
   if (series[k].length > HIST_N) series[k].shift();
@@ -299,7 +364,8 @@ function drawSpark(canvas, data, max) {
   const y = (v) => h - 2 - (Math.min(v, max) / max) * (h - 4);
   ctx.beginPath();
   data.forEach((v, i) => (i ? ctx.lineTo(x0 + i * step, y(v)) : ctx.moveTo(x0, y(v))));
-  ctx.strokeStyle = '#22e3a0';
+  const css = getComputedStyle(document.documentElement);
+  ctx.strokeStyle = css.getPropertyValue('--accent').trim() || '#22e3a0';
   ctx.lineWidth = 2;
   ctx.lineJoin = 'round';
   ctx.stroke();
@@ -307,8 +373,9 @@ function drawSpark(canvas, data, max) {
   ctx.lineTo(x0, h);
   ctx.closePath();
   const g = ctx.createLinearGradient(0, 0, 0, h);
-  g.addColorStop(0, 'rgba(34,227,160,.25)');
-  g.addColorStop(1, 'rgba(34,227,160,0)');
+  const rgb = css.getPropertyValue('--accent-rgb').trim() || '34,227,160';
+  g.addColorStop(0, `rgba(${rgb},.25)`);
+  g.addColorStop(1, `rgba(${rgb},0)`);
   ctx.fillStyle = g;
   ctx.fill();
   const hv = canvas._hover;
@@ -328,8 +395,10 @@ const tileFmt = {
   mem: (v) => `${v}<small>%</small>`,
   disk: (v) => `${v}<small>%</small>`,
   net: (v) => `${fmtBytes(v)}<small>/s</small>`,
+  temp: (v) => `${v}<small>°C</small>`,
 };
 let lastMem = null;
+let lastTemp = null;
 function paintTiles() {
   for (const tile of $$('#monitor .tile')) {
     const k = tile.dataset.m;
@@ -337,6 +406,7 @@ function paintTiles() {
     const cv = $('canvas', tile);
     const last = data[data.length - 1];
     let vhtml = last == null ? '-' : tileFmt[k](last);
+    if (k === 'temp' && lastTemp && last != null) vhtml = [lastTemp.gpu != null ? `GPU ${lastTemp.gpu}°` : '', lastTemp.cpu != null ? `CPU ${lastTemp.cpu}°` : ''].filter(Boolean).join(' · ');
     if (k === 'mem' && lastMem && last != null) vhtml = `${last}<small>% · ${(lastMem.used / 1073741824).toFixed(1)}/${Math.round(lastMem.total / 1073741824)}GB</small>`;
     $('.v', tile).innerHTML = vhtml;
     drawSpark(cv, data, k === 'net' ? netMax() : 100);
@@ -366,9 +436,41 @@ api.on('monitor', (m) => {
   if (m.memTotal) { lastMem = { used: m.memUsed, total: m.memTotal }; push('mem', Math.round((m.memUsed / m.memTotal) * 100)); }
   if (m.disk != null) push('disk', Math.min(100, m.disk));
   if (m.rx != null) push('net', (m.rx || 0) + (m.tx || 0));
+  if (m.gpuTemp != null || m.cpuTemp != null) {
+    // 온도 센서가 있는 PC 에서만 타일을 보인다 (그래프는 GPU 온도 우선)
+    lastTemp = { gpu: m.gpuTemp ?? null, cpu: m.cpuTemp ?? null };
+    push('temp', m.gpuTemp ?? m.cpuTemp);
+    $('#monitor .tile[data-m=temp]').classList.remove('hidden');
+  }
   if (!$('#page-dash').classList.contains('hidden')) paintTiles();
 });
 window.addEventListener('resize', paintTiles);
+
+// ───────── 누적 통계 · PC 상태 ─────────
+let STATS = null;
+let LAST_PCT = null;
+function paintStats(st) {
+  if (!st) return;
+  STATS = st;
+  $('#stFreed').textContent = fmtBytes(st.freedBytes);
+  $('#stClean').textContent = `파일 청소 ${st.cleanRuns || 0}회 · 중복 정리 포함`;
+  $('#stOpt').textContent = (st.optimizeRuns || 0).toLocaleString();
+  paintHealth();
+}
+// 좋음: 적용률 80% 이상 + 최근 검사 위험 0 · 주의 3 이하
+// 점검 필요(빨강): 시스템 검사에서 위험 항목이 실제로 나왔을 때만. 검사 전이거나 최적화를 덜 한 것은 "보통"
+function paintHealth() {
+  const box = $('#stHealth');
+  if (!box || LAST_PCT == null || !STATS) return;
+  const c = STATS.lastCheck;
+  let level = 'ok', txt = '좋음';
+  if (c && c.bad > 0) { level = 'bad'; txt = '점검 필요'; }
+  else if (!c || c.warn > 3 || LAST_PCT < 80) { level = 'warn'; txt = '보통'; }
+  box.className = 'card stat ' + level;
+  $('#stHealthTxt').textContent = txt;
+  $('#stHealthWhy').textContent = `최적화 적용률 ${LAST_PCT}% · ` + (c ? `마지막 검사 위험 ${c.bad} · 주의 ${c.warn}` : '아직 시스템 검사를 하지 않았습니다');
+}
+api.on('stats', paintStats);
 
 // ───────── 작업 기록 ─────────
 const HIST_ICON = { bench: '📊', optimize: '🚀', restore: '↩', clean: '🧹', check: '🩺', bloat: '🗑', startup: '⏱', action: '⚙', guard: '🛡' };
@@ -469,6 +571,51 @@ $('#btnClean').addEventListener('click', async () => {
   loadDrives();
 });
 
+// ───────── 중복 파일 찾기 ─────────
+let DUPS = [];
+function renderDupes(res) {
+  DUPS = res.groups || [];
+  const waste = DUPS.reduce((a, g) => a + g.size * (g.files.length - 1), 0);
+  $('#dupSum').textContent = res.scanned != null ? `파일 ${Number(res.scanned).toLocaleString()}개 검사 · 중복 ${DUPS.length}묶음 · 정리 가능 ${fmtBytes(waste)} (각 묶음에서 가장 최근 파일 하나는 남깁니다)` : $('#dupSum').textContent;
+  const box = $('#dupList');
+  box.innerHTML = '';
+  for (const g of DUPS.slice(0, 150)) {
+    const el = document.createElement('div');
+    el.className = 'dupg';
+    el.innerHTML = `<div class="gh">${g.files.length}개 · 각 ${fmtBytes(g.size)}</div>` + g.files.map((f, i) =>
+      `<label><input type="checkbox" class="dcb" data-path="${esc(f.path)}" ${i ? 'checked' : ''} /><span class="p" title="${esc(f.path)}">${esc(f.path)}</span><span class="t">${esc(f.mtime)}</span></label>`).join('');
+    box.appendChild(el);
+  }
+  updDupBtn();
+}
+function updDupBtn() { $('#btnDupDel').disabled = !$$('#dupList .dcb').some((x) => x.checked); }
+$('#dupList').addEventListener('change', updDupBtn);
+$('#btnDupPick').addEventListener('click', async () => {
+  const p = await call('dupes:pick').catch((e) => toast(e.message, true));
+  if (p) { $('#dupRoot').value = p; $('#btnDupScan').disabled = false; }
+});
+$('#btnDupScan').addEventListener('click', () => withBusy('중복 파일 찾는 중… (파일이 많으면 몇 분 걸릴 수 있습니다)', async () => {
+  renderDupes(await call('dupes:scan', $('#dupRoot').value, Number($('#dupMin').value)));
+}));
+$('#btnDupDel').addEventListener('click', async () => {
+  const paths = $$('#dupList .dcb').filter((x) => x.checked).map((x) => x.dataset.path);
+  if (!(await call('confirm', `선택한 파일 ${paths.length}개를 휴지통으로 보냅니다.\n필요하면 휴지통에서 되살릴 수 있습니다.`))) return;
+  await withBusy('휴지통으로 옮기는 중…', async () => {
+    const r = await call('dupes:delete', paths);
+    const fail = r.results.filter((x) => !x.ok);
+    toast(`🗑 ${r.results.length - fail.length}개 이동, ${fmtBytes(r.freed)} 확보${fail.length ? ` (실패 ${fail.length}개)` : ''}`, fail.length > 0);
+    renderDupes({ groups: r.groups });
+  });
+});
+
+// ───────── 앱 테마 ─────────
+const applyTheme = (t) => { if (t) document.documentElement.dataset.theme = t; else delete document.documentElement.dataset.theme; };
+$('#themeSel').addEventListener('change', async (e) => {
+  applyTheme(e.target.value);
+  await call('settings:set', { theme: e.target.value }).catch(() => {});
+  paintTiles();
+});
+
 // ───────── 정밀 시스템 검사 ─────────
 const CK_ICON = { ok: '✓', warn: '!', bad: '✕', info: 'i' };
 $('#btnCheck').addEventListener('click', () => withBusy('시스템을 검사하는 중…', async () => {
@@ -528,15 +675,16 @@ async function loadStartup() {
       el.className = 'card item';
       el.innerHTML = `
         <div class="body">
-          <div class="title">${esc(it.name)} <span class="badge">${esc(it.label)}</span></div>
+          <div class="title">${esc(it.display || it.name)} <span class="badge">${esc(it.label)}</span></div>
           <div class="cmd" title="${esc(it.cmd)}">${esc(it.cmd)}</div>
         </div>
         <label class="switch"><input type="checkbox" ${it.enabled ? 'checked' : ''} /><span class="slider"></span></label>`;
       $('input', el).addEventListener('change', async (e) => {
         const input = e.target;
         const en = input.checked;
+        if (it.src === 'SVC' && !en && !(await call('confirm', `"${it.display || it.name}" 서비스를 자동 시작에서 빼고 "수동"으로 바꿉니다.\n\n해당 프로그램이 필요할 때 직접 시작하지만, 자동 업데이트나 백그라운드 기능이 늦게 동작할 수 있습니다. 언제든 다시 켤 수 있습니다.`))) { input.checked = true; return; }
         const ok = await withBusy('변경 중…', async () => {
-          await call('startup:set', { src: it.src, name: it.name }, en);
+          await call('startup:set', { src: it.src, name: it.name, path: it.path, display: it.display }, en);
           toast(`${it.name}: 시작 시 실행 ${en ? '켜짐' : '꺼짐'}`);
           return true;
         });
@@ -909,8 +1057,9 @@ $('#btnReboot').addEventListener('click', async () => {
   }
   log('프로그램 시작');
   loadHistory();
-  call('settings:get').then((s) => paintGuard(s.guard)).catch(() => {});
+  call('settings:get').then((s) => { paintGuard(s.guard); applyTheme(s.theme || ''); $('#themeSel').value = s.theme || ''; }).catch(() => {});
   call('update:state').then(paintUpdate).catch(() => {});
+  call('stats').then(paintStats).catch(() => {});
   call('sysinfo')
     .then((s) => {
       $('#sCpu').textContent = `${s.cpu} (${s.cores})`;

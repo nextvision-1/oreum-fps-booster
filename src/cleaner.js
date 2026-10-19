@@ -23,7 +23,7 @@ const CLEAN_ITEMS = [
   { id: 'wu', group: 'system', name: 'Windows 업데이트 다운로드 잔여물', def: true, paths: ['%WINDIR%\\SoftwareDistribution\\Download\\*'] },
   { id: 'doCache', group: 'system', name: '배달 최적화 캐시', def: true, paths: ['%WINDIR%\\ServiceProfiles\\NetworkService\\AppData\\Local\\Microsoft\\Windows\\DeliveryOptimization\\Cache\\*'] },
   { id: 'wer', group: 'system', name: '오류 보고서', def: true, paths: ['%ProgramData%\\Microsoft\\Windows\\WER\\ReportArchive\\*', '%ProgramData%\\Microsoft\\Windows\\WER\\ReportQueue\\*', '%ProgramData%\\Microsoft\\Windows\\WER\\Temp\\*', '%LOCALAPPDATA%\\Microsoft\\Windows\\WER\\*'] },
-  { id: 'dumps', group: 'system', name: '메모리 덤프·크래시 덤프', def: true, paths: ['%LOCALAPPDATA%\\CrashDumps\\*', '%WINDIR%\\Minidump\\*', '%WINDIR%\\MEMORY.DMP', '%WINDIR%\\LiveKernelReports\\*.dmp'] },
+  { id: 'dumps', group: 'system', name: '메모리 덤프·크래시 덤프', def: true, paths: ['%LOCALAPPDATA%\\CrashDumps\\*', '%WINDIR%\\Minidump\\*', '%WINDIR%\\MEMORY.DMP', '%WINDIR%\\LiveKernelReports\\*.dmp', '%WINDIR%\\LiveKernelReports\\*\\*.dmp'] },
   { id: 'logs', group: 'system', name: 'Windows 로그 파일', def: true, olderH: 24, paths: ['%WINDIR%\\Logs\\CBS\\*.log', '%WINDIR%\\Logs\\DISM\\*.log', '%WINDIR%\\Logs\\MoSetup\\*.log', '%WINDIR%\\Logs\\WindowsUpdate\\*.etl', '%WINDIR%\\Logs\\dosvc\\*.etl'] },
   { id: 'diagEtl', group: 'system', name: '진단 데이터 추적 로그', def: true, olderH: 24, paths: ['%ProgramData%\\Microsoft\\Diagnosis\\ETLLogs\\*'] },
   { id: 'setupLogs', group: 'system', name: 'Windows 설치 로그 (Panther)', def: false, olderH: 720, paths: ['%WINDIR%\\Panther\\*.log', '%WINDIR%\\Panther\\UnattendGC\\*.log'] },

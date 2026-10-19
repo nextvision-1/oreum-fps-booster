@@ -116,6 +116,26 @@ function PCS($scheme, $sub, $set, $ac, $dc) {
   PC /setactive SCHEME_CURRENT | Out-Null
 }
 
+# 네트워크 어댑터 DNS (어댑터 GUID 기준). NameServer 가 비어 있으면 DHCP(자동) 상태
+function DnsKey($guid) { return ('Registry::HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Services\Tcpip\Parameters\Interfaces\' + $guid) }
+function DnsIdx($guid) {
+  $a = @(Get-NetAdapter -ErrorAction Stop | Where-Object { $_.InterfaceGuid -eq $guid })
+  if (-not $a.Count) { throw ('네트워크 어댑터를 찾을 수 없습니다: ' + $guid) }
+  return $a[0].ifIndex
+}
+function DnsSet($guid, $servers) {
+  $i = DnsIdx $guid
+  if (@($servers).Count) { Set-DnsClientServerAddress -InterfaceIndex $i -ServerAddresses @($servers) -ErrorAction Stop }
+  else { Set-DnsClientServerAddress -InterfaceIndex $i -ResetServerAddresses -ErrorAction Stop }
+  Clear-DnsClientCache -ErrorAction SilentlyContinue
+}
+
+# JSON 설정 파일의 최상위 값 하나 (예: Discord settings.json). 프로그램이 실행 중이면 종료할 때 파일을 덮어쓰므로 거부
+function JPath($p) { return [Environment]::ExpandEnvironmentVariables($p) }
+function JLoad($p) { return ([IO.File]::ReadAllText((JPath $p)) | ConvertFrom-Json) }
+function JSave($p, $obj) { [IO.File]::WriteAllText((JPath $p), (ConvertTo-Json -InputObject $obj -Depth 20), (New-Object Text.UTF8Encoding($false))) }
+function JGuard($o) { if ($o.proc -and (Get-Process -Name $o.proc -ErrorAction SilentlyContinue)) { throw ($o.proc + ' 을(를) 완전히 종료한 뒤 다시 적용하세요. (실행 중이면 설정이 덮어써집니다)') } }
+
 function OpPrepare($o) {
   # 숨겨진 전원 설정(코어 파킹 등)은 표시 상태로 바꿔야 조회/변경 가능. 실패해도 진행
   if ($o.t -eq 'pcfg') { PC -Quiet -attributes $o.sub $o.set -ATTRIB_HIDE | Out-Null }
@@ -128,6 +148,13 @@ function OpRead($o) {
     'power' { return (PG) }
     'pcfg'  { return (PCG $o.sub $o.set) }
     'key'   { return @{ exists = (Test-Path -LiteralPath $o.root); leaf = (Test-Path -LiteralPath $o.path) } }
+    'dns'   { return @{ exists = $true; value = [string](RG (DnsKey $o.guid) 'NameServer').value } }
+    'json'  {
+      if (-not (Test-Path -LiteralPath (JPath $o.path))) { return @{ exists = $false; file = $false } }
+      $j = JLoad $o.path
+      if ($j.PSObject.Properties.Name -contains $o.key) { return @{ exists = $true; file = $true; value = $j.($o.key) } }
+      return @{ exists = $false; file = $true }
+    }
   }
 }
 
@@ -138,15 +165,48 @@ function OpApply($o) {
     'power' { PApply | Out-Null }
     'pcfg'  { PCS 'SCHEME_CURRENT' $o.sub $o.set $o.value $o.value }
     'key'   { if (-not (Test-Path -LiteralPath $o.path)) { New-Item -Path $o.path -Force | Out-Null }; Set-Item -LiteralPath $o.path -Value ([string]$o.value) }
+    'dns'   { DnsSet $o.guid @($o.servers) }
+    'json'  {
+      JGuard $o
+      $j = JLoad $o.path
+      $j | Add-Member -NotePropertyName $o.key -NotePropertyValue $o.value -Force
+      JSave $o.path $j
+    }
   }
 }
 
 function OpRestore($o, $b) {
   switch ($o.t) {
-    'reg'   { if ($b.exists) { RS $o.path $o.name $b.kind $b.value } else { RDel $o.path $o.name } }
+    'reg'   {
+      if ($b.exists) { RS $o.path $o.name $b.kind $b.value }
+      else {
+        RDel $o.path $o.name
+        # cleanup: 값을 지운 뒤 비게 된 키를 위로 N단계까지 정리 (이 프로그램이 만든 키만 남지 않도록)
+        $p = $o.path
+        for ($i = 0; $i -lt [int]$o.cleanup -and $p; $i++) {
+          $k = Get-Item -LiteralPath $p -ErrorAction SilentlyContinue
+          if (-not $k -or $k.ValueCount -gt 0 -or $k.SubKeyCount -gt 0) { break }
+          Remove-Item -LiteralPath $p -Force
+          # (PS 5.1 의 Split-Path 는 -LiteralPath 와 -Parent 를 함께 못 쓴다)
+          $p = $p.Substring(0, [Math]::Max(0, $p.LastIndexOf('\')))
+        }
+      }
+    }
     'svc'   { if ($b.exists) { SS $o.name $b.start $b.delayed } }
     'power' { if ($b.guid) { PC -setactive $b.guid | Out-Null } }
     'pcfg'  { if ($b.exists) { PCS $b.scheme $o.sub $o.set $b.ac $b.dc } }
+    'dns'   { DnsSet $o.guid @(([string]$b.value) -split '[,\s]+' | Where-Object { $_ }) }
+    'json'  {
+      if (-not $b.file -or -not (Test-Path -LiteralPath (JPath $o.path))) { return }
+      $j = JLoad $o.path
+      # 이미 원래 값이면 (예: 프로그램이 실행 중이라 적용이 거부됐던 경우) 아무것도 하지 않는다
+      $has = $j.PSObject.Properties.Name -contains $o.key
+      if ((-not $b.exists -and -not $has) -or ($b.exists -and $has -and (ConvertTo-Json $j.($o.key) -Compress) -eq (ConvertTo-Json $b.value -Compress))) { return }
+      JGuard $o
+      if ($b.exists) { $j | Add-Member -NotePropertyName $o.key -NotePropertyValue $b.value -Force }
+      else { $j.PSObject.Properties.Remove($o.key) }
+      JSave $o.path $j
+    }
     'key'   {
       # 상위 키가 원래 없었으면 통째로, 있었으면 새로 만든 하위 키만 지운다
       if (-not $b.exists) { if (Test-Path -LiteralPath $o.root) { Remove-Item -LiteralPath $o.root -Recurse -Force } }
