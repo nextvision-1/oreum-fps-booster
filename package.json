@@ -1,6 +1,6 @@
 {
   "name": "oreum-fps-booster",
-  "version": "2.2.1",
+  "version": "2.2.2",
   "description": "Windows 게임 FPS·입력지연 최적화 도구 (백업/복원 지원)",
   "main": "src/main.js",
   "author": "Oreum",
