@@ -185,7 +185,15 @@
             <label>비교</label><select id="cmpB"></select>
           </div>
         </div>
+        <div class="cmp-head">
+          <div class="chips" id="cmpMode">
+            <button class="chip active" data-mode="group">측정 이름별 묶음</button>
+            <button class="chip" data-mode="single">개별 기록</button>
+          </div>
+          <button class="btn small" id="btnCmpCopy" title="측정 조건과 함께 표 형식 글로 복사합니다">📋 결과 복사</button>
+        </div>
         <div id="cmpHeadline" class="cmp-headline"></div>
+        <div id="cmpNotes" class="cmp-notes"></div>
         <div class="legend2"><span><i class="sw a"></i>기준</span><span><i class="sw b"></i>비교</span></div>
         <div id="cmpTable"></div>
         <div id="ftWrap" class="hidden">
@@ -316,6 +324,7 @@
   <div id="busy" class="busy hidden"><div class="spinner"></div><div id="busyText">처리 중…</div></div>
   <div id="toast" class="toast hidden"></div>
 
+  <script src="compare-lib.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

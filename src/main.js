@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, shell, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, shell, dialog, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -33,6 +33,8 @@ const SMOKE = process.env.OFB_SMOKE === '1';
 // 자가진단 모드 (exe --self-test): 창 없이 실제 PC 에서 적용·복원 왕복 등을 검사하고 바탕화면에 보고서를 남긴다
 const SELFTEST = process.argv.includes('--self-test');
 if (SMOKE) app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'ofb-smoke-')));
+// 스모크 테스트에서 비교 화면을 확인할 측정 기록 예시 (OFB_SMOKE_BENCH=json 파일)
+if (SMOKE && process.env.OFB_SMOKE_BENCH) fs.copyFileSync(process.env.OFB_SMOKE_BENCH, path.join(app.getPath('userData'), 'bench.json'));
 
 let win;
 // 적용·복원·감시는 한 번에 하나씩. 진행 중에는 창을 닫지 못하게 해 백업 저장 전에 종료되는 것을 막는다
@@ -340,6 +342,7 @@ handle('clean:run', async (ids) => {
 });
 handle('drives', async () => arr((await runPS(DRIVES)).drives));
 handle('stats', () => loadStats());
+handle('clipboard:write', (text) => { clipboard.writeText(String(text ?? '').slice(0, 100000)); return true; });
 
 // ───────── 중복 파일 찾기 ─────────
 let dupGroups = []; // 마지막 검색 결과. 지울 때 이 안에 있는 파일인지, 묶음마다 하나는 남는지 확인한다
@@ -638,6 +641,7 @@ async function runSmoke() {
     const shot = async (name) => { if (!shots) return; await wait(300); const img = await win.webContents.capturePage(); fs.writeFileSync(path.join(shots, name + '.png'), img.toPNG()); };
     for (const p of ['optimize', 'bench', 'cleaner', 'check', 'startup', 'bloat', 'personal', 'backup', 'history', 'dash']) {
       await js(`goto('${p}')`);
+      if (p === 'bench') { await wait(1200); await js("cmpKind = 'game'; cmpSel = { a: null, b: null }; renderCompare(); document.querySelector('#page-bench .cmp').scrollIntoView()"); }
       await wait(p === 'bloat' || p === 'startup' ? 8000 : 1200);
       await shot(p);
     }
@@ -658,6 +662,7 @@ async function runSmoke() {
       sysCpu: document.getElementById('sCpu').innerText,
       score: document.getElementById('scoreText').innerText,
       benchText: document.getElementById('benchRuns').innerText.slice(0, 60),
+      cmpText: (typeof LAST_CMP !== 'undefined' && LAST_CMP) ? compareText() : '',
       profileText: document.getElementById('profileList').innerText.slice(0, 60),
       stats: [document.getElementById('stFreed').innerText, document.getElementById('stOpt').innerText, document.getElementById('stHealthTxt').innerText],
       tempTile: !document.querySelector('#monitor .tile[data-m=temp]').classList.contains('hidden') ? document.querySelector('#monitor .tile[data-m=temp] .v').innerText : 'hidden',

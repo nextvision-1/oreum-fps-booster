@@ -740,7 +740,6 @@ let BMETA = null;
 let RUNS = [];
 let cmpKind = 'system';
 let cmpSel = { a: null, b: null };
-let warnedPair = null;
 const COL_A = '#8577ee', COL_B = '#17a878';
 
 api.on('bench:progress', (p) => {
@@ -792,73 +791,124 @@ function renderRuns() {
   }
 }
 
+// 비교 단위: 개별 기록 하나, 또는 같은 측정 이름(게임은 같은 게임까지)의 기록 묶음
+let cmpMode = 'group'; // group | single
+let LAST_CMP = null;
+function cmpUnits() {
+  const runs = RUNS.filter((r) => r.kind === cmpKind);
+  if (cmpMode === 'single') return runs.map((r) => ({ id: r.id, name: runName(r), label: r.label, app: r.app, runs: [r] }));
+  return CompareLib.groupRuns(runs).map((g) => ({ ...g, name: `${g.label}${g.kind === 'game' ? ' · ' + g.app : ''} · ${g.runs.length}회` }));
+}
+const VERDICT_WORD = { same: '비슷', uncertain: '범위 겹침 · 불확실', good: '개선', bad: '저하' };
+
 function renderCompare() {
   $$('#cmpKind .chip').forEach((c) => c.classList.toggle('active', c.dataset.kind === cmpKind));
-  const runs = RUNS.filter((r) => r.kind === cmpKind);
+  $$('#cmpMode .chip').forEach((c) => c.classList.toggle('active', c.dataset.mode === cmpMode));
+  const list = cmpUnits();
   const selA = $('#cmpA'), selB = $('#cmpB');
-  const opts = runs.map((r) => `<option value="${r.id}">${esc(runName(r))}</option>`).join('');
+  const opts = list.map((u) => `<option value="${esc(u.id)}">${esc(u.name)}</option>`).join('');
   selA.innerHTML = opts; selB.innerHTML = opts;
-  if (runs.length < 2) {
+  if (list.length < 2) {
     $('#cmpHeadline').innerHTML = '';
-    $('#cmpTable').innerHTML = `<div class="empty">비교하려면 측정 기록이 2개 이상 필요합니다. (현재 ${runs.length}개)</div>`;
+    $('#cmpNotes').innerHTML = '';
+    $('#cmpTable').innerHTML = cmpMode === 'group'
+      ? '<div class="empty">비교하려면 측정 이름이 다른 기록이 필요합니다. 예: "최적화 전"으로 3번, 최적화 후 "재부팅 후"로 3번 측정하세요.</div>'
+      : `<div class="empty">비교하려면 측정 기록이 2개 이상 필요합니다. (현재 ${list.length}개)</div>`;
     $('#ftWrap').classList.add('hidden');
+    LAST_CMP = null;
     return;
   }
-  // 기본 선택: "최적화 전" 중 가장 최근 것과 가장 최근 측정
-  if (!runs.find((r) => r.id === cmpSel.a) || !runs.find((r) => r.id === cmpSel.b)) {
-    const b = runs[0];
-    const a = runs.find((r) => r.id !== b.id && r.label === '최적화 전' && (r.kind !== 'game' || r.app === b.app)) || runs[1];
+  // 기본 선택: 가장 최근 단위와, 같은 게임의 "최적화 전"
+  if (!list.find((u) => u.id === cmpSel.a) || !list.find((u) => u.id === cmpSel.b)) {
+    const b = list[0];
+    const a = list.find((u) => u.id !== b.id && u.label === '최적화 전' && (cmpKind !== 'game' || u.app === b.app)) || list[1];
     cmpSel = { a: a.id, b: b.id };
   }
   selA.value = cmpSel.a; selB.value = cmpSel.b;
-  const A = runs.find((r) => r.id === cmpSel.a), B = runs.find((r) => r.id === cmpSel.b);
+  const A = list.find((u) => u.id === cmpSel.a), B = list.find((u) => u.id === cmpSel.b);
   const defs = cmpKind === 'game' ? BMETA.game : BMETA.system;
+  const S = (u, k) => CompareLib.metricOf(u, k);
 
-  const pct = (d, a, b) => {
-    if (a == null || b == null || !Number(a)) return null;
-    const ch = ((b - a) / Math.abs(a)) * 100;
-    return d.better === 'up' ? ch : -ch; // +면 개선
-  };
-  const deltaHtml = (d, a, b) => {
-    const p = pct(d, a, b);
-    if (p == null) return '<span class="delta same">-</span>';
-    const raw = ((b - a) / Math.abs(a)) * 100;
-    const cls = Math.abs(p) < 1 ? 'same' : p > 0 ? 'good' : 'bad';
-    const word = Math.abs(p) < 1 ? '비슷' : p > 0 ? '개선' : '저하';
-    const arrow = raw > 0 ? '▲' : raw < 0 ? '▼' : '';
-    return `<span class="delta ${cls}">${arrow} ${Math.abs(raw).toFixed(1)}% ${word}</span>`;
+  const cell = (s, d) => !s ? '-' : `${fmtNum(s.mean, d.digits)} ${d.unit}` + (s.n > 1 ? `<div class="rng">${fmtNum(s.min, d.digits)} ~ ${fmtNum(s.max, d.digits)} · ${s.n}회</div>` : '');
+  const deltaHtml = (d, sa, sb) => {
+    const v = CompareLib.verdict(d, sa, sb);
+    if (v.kind === 'na') return '<span class="delta same">-</span>';
+    const arrow = v.raw > 0 ? '▲' : v.raw < 0 ? '▼' : '';
+    const cls = v.kind === 'good' ? 'good' : v.kind === 'bad' ? 'bad' : 'same';
+    return `<span class="delta ${cls}">${arrow} ${Math.abs(v.raw).toFixed(1)}% ${VERDICT_WORD[v.kind]}</span>`;
   };
 
   // 헤드라인 3개
   const heads = cmpKind === 'game' ? ['avgFps', 'low1', 'stutters'] : ['gpuFps', 'gpuLow1', 'cpuMulti'];
   $('#cmpHeadline').innerHTML = heads.map((k) => {
     const d = defs.find((x) => x.key === k);
-    const a = A.metrics[k], b = B.metrics[k];
-    return `<div class="hl"><div class="k">${esc(d.name)}</div><div class="v">${fmtNum(b, d.digits)} <span class="small muted">${d.unit}</span></div>${deltaHtml(d, a, b)}</div>`;
+    const sb = S(B, k);
+    return `<div class="hl"><div class="k">${esc(d.name)}</div><div class="v">${fmtNum(sb?.mean, d.digits)} <span class="small muted">${d.unit}</span></div>${deltaHtml(d, S(A, k), sb)}</div>`;
   }).join('');
 
   const rows = defs.map((d) => {
-    const a = A.metrics[d.key], b = B.metrics[d.key];
-    const mx = Math.max(Number(a) || 0, Number(b) || 0) || 1;
-    const w = (v) => `${Math.max(1, ((Number(v) || 0) / mx) * 100).toFixed(1)}`;
-    return `<tr><td>${esc(d.name)}</td><td class="num">${fmtNum(a, d.digits)} ${d.unit}</td><td class="num">${fmtNum(b, d.digits)} ${d.unit}</td>
-      <td class="bars"><div class="a" data-w="${w(a)}" title="기준 ${fmtNum(a, d.digits)} ${d.unit}"></div><div class="b" data-w="${w(b)}" title="비교 ${fmtNum(b, d.digits)} ${d.unit}"></div></td>
-      <td class="num">${deltaHtml(d, a, b)}</td></tr>`;
+    const sa = S(A, d.key), sb = S(B, d.key);
+    const mx = Math.max(Number(sa?.mean) || 0, Number(sb?.mean) || 0) || 1;
+    const w = (s) => `${Math.max(1, ((Number(s?.mean) || 0) / mx) * 100).toFixed(1)}`;
+    return `<tr><td>${esc(d.name)}</td><td class="num">${cell(sa, d)}</td><td class="num">${cell(sb, d)}</td>
+      <td class="bars"><div class="a" data-w="${w(sa)}"></div><div class="b" data-w="${w(sb)}"></div></td>
+      <td class="num">${deltaHtml(d, sa, sb)}</td></tr>`;
   }).join('');
   $('#cmpTable').innerHTML = `<table class="cmpt"><thead><tr><th>항목</th><th class="num">기준</th><th class="num">비교</th><th>그래프</th><th class="num">변화</th></tr></thead><tbody>${rows}</tbody></table>`;
   $$('#cmpTable .bars div').forEach((el) => { el.style.width = el.dataset.w + '%'; });
-  // 창 크기를 바꿀 때마다 다시 그리므로, 같은 조합에서는 경고를 한 번만 띄운다
-  const pairKey = A.id + '|' + B.id;
-  if (cmpKind === 'game' && A.app !== B.app && warnedPair !== pairKey) toast('서로 다른 게임의 기록을 비교하고 있습니다.', true);
-  // 그래픽 테스트 측정 방식이 바뀐 기록끼리는 그래픽 수치를 비교할 수 없다 (이전 방식은 60 FPS 로 제한됨)
-  if (cmpKind === 'system' && (A.env?.benchVer || 1) !== (B.env?.benchVer || 1) && warnedPair !== pairKey) toast('그래픽 테스트 측정 방식이 바뀐 이전 기록과 비교하고 있습니다. 그래픽 FPS 는 비교할 수 없으니 새로 두 번 측정하세요.', true);
-  warnedPair = pairKey;
 
-  const showFt = cmpKind === 'game' && A.series && B.series;
+  // 해석 안내: 상한, 측정 횟수, 서로 다른 게임·측정 방식
+  const notes = [];
+  if (cmpKind === 'game') {
+    const cap = CompareLib.detectCap(S(A, 'avgFps')?.mean, S(B, 'avgFps')?.mean);
+    if (cap) notes.push(`평균 FPS 가 ${cap} FPS 상한에 걸려 있습니다 (게임·드라이버의 프레임 제한). 상한에 걸린 게임은 평균 FPS 로 차이를 볼 수 없으니 1% Low·0.1% Low·스터터로 비교하세요.`);
+    if (A.app !== B.app) notes.push('서로 다른 게임의 기록을 비교하고 있습니다.');
+  } else if ((A.runs[0].env?.benchVer || 1) !== (B.runs[0].env?.benchVer || 1)) {
+    notes.push('그래픽 테스트 측정 방식이 바뀐 이전 기록과 비교하고 있습니다. 그래픽 FPS 는 비교할 수 없으니 새로 측정하세요.');
+  }
+  if (cmpMode === 'single') notes.push('개별 기록 비교는 한 번의 흔들림이 그대로 보입니다. 같은 이름으로 3번씩 측정한 뒤 "측정 이름별 묶음"으로 비교하는 것을 권장합니다.');
+  else if (A.runs.length < 3 || B.runs.length < 3) notes.push(`측정 횟수가 적습니다 (기준 ${A.runs.length}회 · 비교 ${B.runs.length}회). 1% Low·스터터는 크게 흔들리니 각각 3회 이상 측정하세요. 양쪽 범위가 겹치면 "불확실"로 표시됩니다.`);
+  $('#cmpNotes').innerHTML = notes.map((n) => `<div class="note">${esc(n)}</div>`).join('');
+  LAST_CMP = { A, B, defs, kind: cmpKind, notes };
+
+  const fa = A.runs[0], fb = B.runs[0]; // 프레임 시간 그래프는 각 쪽의 가장 최근 기록
+  const showFt = cmpKind === 'game' && fa.series && fb.series;
   $('#ftWrap').classList.toggle('hidden', !showFt);
-  ftPair = showFt ? [A, B] : null;
-  if (showFt) drawFt(A, B);
+  ftPair = showFt ? [fa, fb] : null;
+  if (showFt) drawFt(fa, fb);
 }
+
+// 비교 결과를 표 형식 글로 복사 (홈페이지·README 게시용). 측정 조건을 함께 적는다
+function compareText() {
+  const { A, B, defs, kind, notes } = LAST_CMP;
+  const env = B.runs[0].env || A.runs[0].env || {};
+  const plain = (s, d) => !s ? '-' : `${fmtNum(s.mean, d.digits)} ${d.unit}` + (s.n > 1 ? ` (${fmtNum(s.min, d.digits)}~${fmtNum(s.max, d.digits)})` : '');
+  const out = [];
+  out.push(`### ${kind === 'game' ? A.app : '시스템 벤치마크'}`);
+  out.push(`- PC: ${env.cpu || '-'} / ${env.gpu || '-'}${env.ramGB ? ` / ${env.ramGB}GB` : ''}`);
+  out.push(`- 측정: "${A.label}" ${A.runs.length}회 → "${B.label}" ${B.runs.length}회${kind === 'game' && A.runs[0].seconds ? ` (각 ${A.runs[0].seconds}초)` : ''}, 괄호는 최저~최고`);
+  out.push('', `| 지표 | ${A.label} | ${B.label} | 변화 |`, '|---|---:|---:|---|');
+  for (const d of defs) {
+    const sa = CompareLib.metricOf(A, d.key), sb = CompareLib.metricOf(B, d.key);
+    const v = CompareLib.verdict(d, sa, sb);
+    const ch = v.kind === 'na' ? '-' : `${v.raw > 0 ? '+' : ''}${v.raw.toFixed(1)}% ${VERDICT_WORD[v.kind]}`;
+    out.push(`| ${d.name} | ${plain(sa, d)} | ${plain(sb, d)} | ${ch} |`);
+  }
+  if (notes.length) out.push('', ...notes.map((n) => '> ' + n));
+  return out.join('\n');
+}
+$('#btnCmpCopy').addEventListener('click', async () => {
+  if (!LAST_CMP) return toast('비교할 기록이 없습니다.', true);
+  await call('clipboard:write', compareText()).then(() => toast('📋 비교 결과를 복사했습니다. 그대로 붙여넣으면 됩니다.')).catch((e) => toast(e.message, true));
+});
+$('#cmpMode').addEventListener('click', (e) => {
+  const c = e.target.closest('.chip');
+  if (!c) return;
+  cmpMode = c.dataset.mode;
+  cmpSel = { a: null, b: null };
+  renderCompare();
+});
+
 let ftPair = null;
 
 let ftHover = null;

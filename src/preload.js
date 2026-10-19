@@ -5,7 +5,7 @@ const CHANNELS = [
   'clean:scan', 'clean:run', 'drives', 'check:run', 'bloat:list', 'bloat:remove',
   'startup:list', 'startup:set', 'backup:info', 'backup:open', 'history',
   'settings:get', 'settings:set', 'guard:run', 'admin:relaunch', 'confirm', 'reboot',
-  'stats', 'dupes:pick', 'dupes:scan', 'dupes:delete',
+  'stats', 'clipboard:write', 'dupes:pick', 'dupes:scan', 'dupes:delete',
   'profile:list', 'profile:add', 'profile:remove', 'display:list', 'display:max',
   'update:state', 'update:check', 'update:download', 'update:install',
   'bench:meta', 'bench:list', 'bench:delete', 'bench:system', 'bench:procs', 'bench:game',

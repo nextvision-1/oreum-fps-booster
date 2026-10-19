@@ -310,6 +310,20 @@ async function pmCapture({ target, seconds, delay = 0, onTick }) {
   return parsed;
 }
 
+// 결과를 게시할 때 측정 조건으로 쓰는 PC 사양 (외장 그래픽 우선)
+let envCache = null;
+async function pcEnv() {
+  if (envCache) return envCache;
+  let gpu = null;
+  try {
+    const r = await runPS(String.raw`Emit @{ list = @(Get-CimInstance Win32_VideoController | Where-Object { $_.Name -notmatch 'Remote|Virtual|Parsec|Basic|Meta' } | ForEach-Object { $_.Name }) }`);
+    const l = [].concat(r.list || []);
+    gpu = l.find((x) => /NVIDIA|Radeon RX|Arc/i.test(x)) || l[0] || null;
+  } catch (_) {}
+  envCache = { cpu: os.cpus()[0]?.model?.trim(), threads: os.cpus().length, ramGB: Math.round(os.totalmem() / 1073741824), gpu };
+  return envCache;
+}
+
 async function measureGame({ pid, name, seconds, delay, label, progress }) {
   progress(3, 'FPS 측정 도구 확인 중…');
   const parsed = await pmCapture({
@@ -323,7 +337,7 @@ async function measureGame({ pid, name, seconds, delay, label, progress }) {
   const st = frameStats(parsed.ft);
   const run = {
     id: Date.now().toString(36), kind: 'game', time: new Date().toISOString(), label: label || '측정',
-    app: parsed.appName || name + '.exe', seconds, metrics: { avgFps: st.avgFps, low1: st.low1, low01: st.low01, ftAvg: st.ftAvg, ftP99: st.ftP99, stutters: st.stutters },
+    env: await pcEnv(), app: parsed.appName || name + '.exe', seconds, metrics: { avgFps: st.avgFps, low1: st.low1, low01: st.low01, ftAvg: st.ftAvg, ftP99: st.ftP99, stutters: st.stutters },
     frames: st.frames, series: st.series,
   };
   const runs = loadRuns();

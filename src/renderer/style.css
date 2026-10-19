@@ -257,3 +257,6 @@ table.cmpt { width: 100%; border-collapse: collapse; font-size: 13px; }
 .game-result { margin-top: 10px; padding: 10px 12px; border-radius: 10px; font-size: 13px; line-height: 1.5; }
 .game-result.ok { background: rgba(var(--accent-rgb), .1); border: 1px solid rgba(var(--accent-rgb), .35); }
 .game-result.bad { background: rgba(255, 93, 108, .1); border: 1px solid rgba(255, 93, 108, .4); color: var(--danger); }
+/* 전/후 비교: 범위·안내 */
+.cmpt .rng { font-size: 11px; color: var(--muted); font-weight: 400; }
+.cmp-notes .note { margin: 8px 0; padding: 8px 12px; border-radius: 8px; background: var(--panel2); border-left: 3px solid var(--warn); font-size: 12.5px; line-height: 1.5; }
