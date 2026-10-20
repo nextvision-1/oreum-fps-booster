@@ -11,16 +11,16 @@
     return { n: v.length, mean: v.reduce((a, b) => a + b, 0) / v.length, min: Math.min(...v), max: Math.max(...v) };
   }
 
-  // 묶음 키: 게임은 "측정 이름 + 게임", 시스템은 "측정 이름 + 측정 방식 버전"(이전 방식과 섞이지 않게)
+  // 묶음 키: 게임은 "측정 이름 + 게임 + 장면(맵)", 시스템은 "측정 이름 + 측정 방식 버전"(이전 방식과 섞이지 않게)
   function groupKey(r) {
-    return r.kind === 'game' ? `game|${r.label}|${String(r.app || '').toLowerCase()}` : `system|${r.label}|${r.env?.benchVer || 1}`;
+    return r.kind === 'game' ? `game|${r.label}|${String(r.app || '').toLowerCase()}|${String(r.scene || '').trim().toLowerCase()}` : `system|${r.label}|${r.env?.benchVer || 1}`;
   }
 
   function groupRuns(runs) {
     const map = new Map();
     for (const r of runs) {
       const k = groupKey(r);
-      if (!map.has(k)) map.set(k, { id: k, label: r.label, app: r.app, kind: r.kind, runs: [] });
+      if (!map.has(k)) map.set(k, { id: k, label: r.label, app: r.app, scene: r.scene || '', kind: r.kind, runs: [] });
       map.get(k).runs.push(r);
     }
     return [...map.values()];

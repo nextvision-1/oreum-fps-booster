@@ -324,7 +324,7 @@ async function pcEnv() {
   return envCache;
 }
 
-async function measureGame({ pid, name, seconds, delay, label, progress }) {
+async function measureGame({ pid, name, seconds, delay, label, scene, progress }) {
   progress(3, 'FPS 측정 도구 확인 중…');
   const parsed = await pmCapture({
     target: name ? { name: name.toLowerCase().endsWith('.exe') ? name : name + '.exe' } : { pid },
@@ -337,7 +337,7 @@ async function measureGame({ pid, name, seconds, delay, label, progress }) {
   const st = frameStats(parsed.ft);
   const run = {
     id: Date.now().toString(36), kind: 'game', time: new Date().toISOString(), label: label || '측정',
-    env: await pcEnv(), app: parsed.appName || name + '.exe', seconds, metrics: { avgFps: st.avgFps, low1: st.low1, low01: st.low01, ftAvg: st.ftAvg, ftP99: st.ftP99, stutters: st.stutters },
+    env: await pcEnv(), app: parsed.appName || name + '.exe', scene: scene || '', seconds, metrics: { avgFps: st.avgFps, low1: st.low1, low01: st.low01, ftAvg: st.ftAvg, ftP99: st.ftP99, stutters: st.stutters },
     frames: st.frames, series: st.series,
   };
   const runs = loadRuns();

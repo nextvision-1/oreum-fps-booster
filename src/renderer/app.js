@@ -757,7 +757,7 @@ async function runSystemBench(label, silent = false) {
 }
 
 const fmtNum = (v, d = 1) => (v == null || Number.isNaN(Number(v)) ? '-' : Number(v).toLocaleString('ko-KR', { minimumFractionDigits: d, maximumFractionDigits: d }));
-const runName = (r) => `${r.label} · ${fmtTime(r.time)}${r.kind === 'game' ? ' · ' + r.app : ''}`;
+const runName = (r) => `${r.label} · ${fmtTime(r.time)}${r.kind === 'game' ? ' · ' + r.app + (r.scene ? ' · ' + r.scene : '') : ''}`;
 
 async function loadBench() {
   try {
@@ -797,7 +797,7 @@ let LAST_CMP = null;
 function cmpUnits() {
   const runs = RUNS.filter((r) => r.kind === cmpKind);
   if (cmpMode === 'single') return runs.map((r) => ({ id: r.id, name: runName(r), label: r.label, app: r.app, runs: [r] }));
-  return CompareLib.groupRuns(runs).map((g) => ({ ...g, name: `${g.label}${g.kind === 'game' ? ' · ' + g.app : ''} · ${g.runs.length}회` }));
+  return CompareLib.groupRuns(runs).map((g) => ({ ...g, name: `${g.label}${g.kind === 'game' ? ' · ' + g.app + (g.scene ? ' · ' + g.scene : '') : ''} · ${g.runs.length}회` }));
 }
 const VERDICT_WORD = { same: '비슷', uncertain: '범위 겹침 · 불확실', good: '개선', bad: '저하' };
 
@@ -821,7 +821,7 @@ function renderCompare() {
   // 기본 선택: 가장 최근 단위와, 같은 게임의 "최적화 전"
   if (!list.find((u) => u.id === cmpSel.a) || !list.find((u) => u.id === cmpSel.b)) {
     const b = list[0];
-    const a = list.find((u) => u.id !== b.id && u.label === '최적화 전' && (cmpKind !== 'game' || u.app === b.app)) || list[1];
+    const a = list.find((u) => u.id !== b.id && u.label === '최적화 전' && (cmpKind !== 'game' || (u.app === b.app && (u.scene || '') === (b.scene || '')))) || list[1];
     cmpSel = { a: a.id, b: b.id };
   }
   selA.value = cmpSel.a; selB.value = cmpSel.b;
@@ -863,6 +863,7 @@ function renderCompare() {
     const cap = CompareLib.detectCap(S(A, 'avgFps')?.mean, S(B, 'avgFps')?.mean);
     if (cap) notes.push(`평균 FPS 가 ${cap} FPS 상한에 걸려 있습니다 (게임·드라이버의 프레임 제한). 상한에 걸린 게임은 평균 FPS 로 차이를 볼 수 없으니 1% Low·0.1% Low·스터터로 비교하세요.`);
     if (A.app !== B.app) notes.push('서로 다른 게임의 기록을 비교하고 있습니다.');
+    else if ((A.scene || '') !== (B.scene || '')) notes.push('서로 다른 장면(맵)의 기록을 비교하고 있습니다. 맵마다 FPS 가 달라 같은 장면끼리 비교해야 정확합니다.');
   } else if ((A.runs[0].env?.benchVer || 1) !== (B.runs[0].env?.benchVer || 1)) {
     notes.push('그래픽 테스트 측정 방식이 바뀐 이전 기록과 비교하고 있습니다. 그래픽 FPS 는 비교할 수 없으니 새로 측정하세요.');
   }
@@ -884,7 +885,7 @@ function compareText() {
   const env = B.runs[0].env || A.runs[0].env || {};
   const plain = (s, d) => !s ? '-' : `${fmtNum(s.mean, d.digits)} ${d.unit}` + (s.n > 1 ? ` (${fmtNum(s.min, d.digits)}~${fmtNum(s.max, d.digits)})` : '');
   const out = [];
-  out.push(`### ${kind === 'game' ? A.app : '시스템 벤치마크'}`);
+  out.push(`### ${kind === 'game' ? A.app + (A.scene ? ' — ' + A.scene : '') : '시스템 벤치마크'}`);
   out.push(`- PC: ${env.cpu || '-'} / ${env.gpu || '-'}${env.ramGB ? ` / ${env.ramGB}GB` : ''}`);
   out.push(`- 측정: "${A.label}" ${A.runs.length}회 → "${B.label}" ${B.runs.length}회${kind === 'game' && A.runs[0].seconds ? ` (각 ${A.runs[0].seconds}초)` : ''}, 괄호는 최저~최고`);
   out.push('', `| 지표 | ${A.label} | ${B.label} | 변화 |`, '|---|---:|---:|---|');
@@ -990,7 +991,7 @@ $('#btnBenchGame').addEventListener('click', async () => {
   const sel = $('#bgProc');
   if (!sel.value) { await loadProcs(); if (!sel.value) return toast('게임을 먼저 실행한 뒤 새로고침을 눌러 선택하세요.', true); }
   const opt = sel.selectedOptions[0];
-  const params = { pid: Number(sel.value), name: opt.dataset.name, seconds: Number($('#bgSec').value), delay: Number($('#bgDelay').value), label: $('#bgLabel').value };
+  const params = { pid: Number(sel.value), name: opt.dataset.name, seconds: Number($('#bgSec').value), delay: Number($('#bgDelay').value), label: $('#bgLabel').value, scene: $('#bgScene').value.trim() };
   // 결과(성공·실패)를 카드에 계속 표시한다. 측정 중엔 게임 화면에 있어 몇 초짜리 알림은 놓치기 쉽다
   const box = $('#gameResult');
   let failMsg = null;

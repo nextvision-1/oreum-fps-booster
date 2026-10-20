@@ -46,3 +46,13 @@ test('summarize: 빈 값·숫자 아닌 값 무시', () => {
   assert.equal(C.summarize([]), null);
   assert.deepEqual(C.summarize([1, null, undefined, '', 'x', 3]), { n: 2, mean: 2, min: 1, max: 3 });
 });
+
+test('묶음: 같은 게임이라도 장면(맵)이 다르면 따로, 장면 없는 예전 기록도 따로', () => {
+  const g = C.groupRuns([
+    { ...run('최적화 전', { avgFps: 199 }), scene: '제3보급창고' },
+    { ...run('최적화 전', { avgFps: 198 }), scene: ' 제3보급창고 ' },
+    { ...run('최적화 전', { avgFps: 137 }), scene: '프로방스' },
+    run('최적화 전', { avgFps: 190 }),
+  ]);
+  assert.deepEqual(g.map((x) => [x.scene.trim(), x.runs.length]), [['제3보급창고', 2], ['프로방스', 1], ['', 1]]);
+});

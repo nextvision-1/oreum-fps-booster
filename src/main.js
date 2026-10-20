@@ -562,7 +562,7 @@ handle('bench:game', async (opt) => {
   // 실패 이유는 작업 기록에 남긴다 (알림은 몇 초 뒤 사라져 놓치기 쉽다)
   try {
     const run = await bench.runGameBench({
-      pid, name, label: benchLabel(opt.label),
+      pid, name, label: benchLabel(opt.label), scene: String(opt.scene || '').trim().slice(0, 30),
       seconds: clampInt(opt.seconds, 5, 600, 60), delay: clampInt(opt.delay, 0, 60, 10), progress: benchProgress,
     });
     addHistory('bench', `게임 FPS (${run.label}) ${run.app}: 평균 ${run.metrics.avgFps} · 1% Low ${run.metrics.low1}`);

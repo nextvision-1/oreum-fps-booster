@@ -167,6 +167,10 @@
           <div class="form-row">
             <label>측정 이름</label>
             <select id="bgLabel"><option>최적화 전</option><option>최적화 후</option><option>재부팅 후</option></select>
+            <label>장면(맵)</label>
+            <input id="bgScene" maxlength="30" placeholder="예: 제3보급창고 교전" title="같은 게임이라도 장면이 다르면 따로 묶어 비교합니다" />
+          </div>
+          <div class="muted small">맵마다 FPS 가 크게 달라 장면을 적어 두면 같은 장면끼리만 비교합니다. 맵 로딩·리스폰 화면이 측정에 들어가지 않도록 게임 중일 때 측정이 시작되게 "시작 대기"를 맞추세요.
           </div>
           <button class="btn primary" id="btnBenchGame">측정 시작</button>
           <div class="muted small" id="pmNote"></div>
